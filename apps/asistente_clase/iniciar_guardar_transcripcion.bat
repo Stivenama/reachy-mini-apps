@@ -1,0 +1,4 @@
+@echo off
+cd /d "%~dp0"
+"%~dp0.venv\Scripts\python.exe" "%~dp0guardar_transcripcion.py"
+pause

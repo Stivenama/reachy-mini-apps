@@ -7,6 +7,7 @@ Desarrollo organizado para mantener y reconstruir las aplicaciones de un Reachy 
 | `apps/reachy_mini_hub` | Hub de conversación, movimientos, personalidades y herramientas; incluye adaptaciones locales. |
 | `apps/reachy_mini_audio_mixer` | Selección y control de salida de audio. |
 | `apps/reachy_mini_classroom` | Clase continua: transcripción local en español, bloques de 20 minutos y resumen hablado bajo demanda. |
+| `apps/asistente_clase` | Aplicación para Windows: recibe los TXT, integra Drive, Classroom y NotebookLM, y genera materiales de estudio. Incluye su interfaz web y receptor local. |
 | `portal` | Controlador web que inicia y abre las aplicaciones. |
 | `environment` | Versiones instaladas y listas para reconstruir los entornos. |
 | `scripts` | Preparación de entornos y revisión de archivos antes de publicar. |
@@ -15,6 +16,8 @@ Desarrollo organizado para mantener y reconstruir las aplicaciones de un Reachy 
 El entorno virtual se conserva como instrucciones y dependencias versionadas. Los ejecutables de un `venv` contienen rutas y dependen del sistema donde fueron creados; se reconstruyen en el equipo de destino, según la [documentación de Python](https://docs.python.org/3/library/venv.html#how-venvs-work).
 
 ## Empezar
+
+Para **Asistente de clase en el computador**, seguir su [guía independiente](apps/asistente_clase/README.md). Su entorno Windows se instala por separado de los entornos Linux del robot.
 
 1. Leer [instalación](docs/INSTALACION.md).
 2. Crear los entornos con `bash scripts/create_environments.sh` en Linux ARM64 con Python 3.12.

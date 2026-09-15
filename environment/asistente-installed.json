@@ -1,0 +1,226 @@
+[
+  {
+    "name": "annotated-doc",
+    "version": "0.0.5"
+  },
+  {
+    "name": "annotated-types",
+    "version": "0.8.0"
+  },
+  {
+    "name": "anyio",
+    "version": "4.15.1"
+  },
+  {
+    "name": "certifi",
+    "version": "2026.7.22"
+  },
+  {
+    "name": "cffi",
+    "version": "2.1.1"
+  },
+  {
+    "name": "charset-normalizer",
+    "version": "3.5.1"
+  },
+  {
+    "name": "click",
+    "version": "8.5.0"
+  },
+  {
+    "name": "cryptography",
+    "version": "50.0.1"
+  },
+  {
+    "name": "fastapi",
+    "version": "0.141.1"
+  },
+  {
+    "name": "filelock",
+    "version": "3.32.6"
+  },
+  {
+    "name": "google-api-core",
+    "version": "2.36.0"
+  },
+  {
+    "name": "google-api-python-client",
+    "version": "2.200.0"
+  },
+  {
+    "name": "google-auth",
+    "version": "2.58.0"
+  },
+  {
+    "name": "google-auth-httplib2",
+    "version": "0.4.2"
+  },
+  {
+    "name": "google-auth-oauthlib",
+    "version": "1.4.1"
+  },
+  {
+    "name": "googleapis-common-protos",
+    "version": "1.75.3"
+  },
+  {
+    "name": "greenlet",
+    "version": "3.5.5"
+  },
+  {
+    "name": "h11",
+    "version": "0.16.0"
+  },
+  {
+    "name": "httpcore",
+    "version": "1.0.9"
+  },
+  {
+    "name": "httplib2",
+    "version": "0.32.0"
+  },
+  {
+    "name": "httptools",
+    "version": "0.8.0"
+  },
+  {
+    "name": "httpx",
+    "version": "0.28.1"
+  },
+  {
+    "name": "idna",
+    "version": "3.19"
+  },
+  {
+    "name": "Jinja2",
+    "version": "3.1.6"
+  },
+  {
+    "name": "markdown-it-py",
+    "version": "4.2.0"
+  },
+  {
+    "name": "MarkupSafe",
+    "version": "3.0.3"
+  },
+  {
+    "name": "mdurl",
+    "version": "0.1.2"
+  },
+  {
+    "name": "notebooklm-py",
+    "version": "0.8.2"
+  },
+  {
+    "name": "oauthlib",
+    "version": "3.3.1"
+  },
+  {
+    "name": "opentelemetry-api",
+    "version": "1.44.0"
+  },
+  {
+    "name": "pip",
+    "version": "26.2.1"
+  },
+  {
+    "name": "playwright",
+    "version": "1.62.0"
+  },
+  {
+    "name": "proto-plus",
+    "version": "1.28.4"
+  },
+  {
+    "name": "protobuf",
+    "version": "7.36.1"
+  },
+  {
+    "name": "pyasn1",
+    "version": "0.6.4"
+  },
+  {
+    "name": "pyasn1_modules",
+    "version": "0.4.2"
+  },
+  {
+    "name": "pycparser",
+    "version": "3.0"
+  },
+  {
+    "name": "pydantic",
+    "version": "2.13.5"
+  },
+  {
+    "name": "pydantic_core",
+    "version": "2.46.5"
+  },
+  {
+    "name": "pyee",
+    "version": "13.0.1"
+  },
+  {
+    "name": "Pygments",
+    "version": "2.21.0"
+  },
+  {
+    "name": "pyparsing",
+    "version": "3.3.2"
+  },
+  {
+    "name": "python-dotenv",
+    "version": "1.2.3"
+  },
+  {
+    "name": "python-multipart",
+    "version": "0.0.32"
+  },
+  {
+    "name": "PyYAML",
+    "version": "6.0.3"
+  },
+  {
+    "name": "requests",
+    "version": "2.34.2"
+  },
+  {
+    "name": "requests-oauthlib",
+    "version": "2.0.0"
+  },
+  {
+    "name": "rich",
+    "version": "15.0.0"
+  },
+  {
+    "name": "starlette",
+    "version": "1.6.0"
+  },
+  {
+    "name": "typing_extensions",
+    "version": "4.16.0"
+  },
+  {
+    "name": "typing-inspection",
+    "version": "0.4.4"
+  },
+  {
+    "name": "uritemplate",
+    "version": "4.2.0"
+  },
+  {
+    "name": "urllib3",
+    "version": "2.7.0"
+  },
+  {
+    "name": "uvicorn",
+    "version": "0.52.4"
+  },
+  {
+    "name": "watchfiles",
+    "version": "1.2.0"
+  },
+  {
+    "name": "websockets",
+    "version": "17.1"
+  }
+]

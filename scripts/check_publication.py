@@ -1,18 +1,22 @@
 """Fail closed on common secrets and private-data files; never print their values."""
 import re
+import json
+import hashlib
 import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+REVIEWED_ASSETS = json.loads((ROOT / 'scripts/reviewed_assets.json').read_text(encoding='utf-8'))
 PATTERNS = {
+    'token Google': re.compile(r'\bya29\.[A-Za-z0-9_-]+|\b1//[A-Za-z0-9_-]{20,}'),
     'token HF': re.compile(r'\bhf_[A-Za-z0-9]{20,}\b'),
     'token GitHub': re.compile(r'\bgh[pousr]_[A-Za-z0-9]{20,}\b|\bgithub_pat_[A-Za-z0-9_]{30,}\b'),
     'clave API': re.compile(r'\bsk-(?:proj-)?[A-Za-z0-9_-]{24,}\b'),
     'clave privada': re.compile(r'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----'),
     'URL con credenciales': re.compile(r'https?://[^\s/:@]+:[^\s/@]+@'),
 }
-FORBIDDEN_PARTS = {'recordings', 'transcripciones', 'respaldos', 'sessions', '.venv', '.venvs', '__pycache__', 'external_content', 'user_personalities'}
+FORBIDDEN_PARTS = {'secrets', '.notebooklm', 'descargas', 'recordings', 'transcripciones', 'respaldos', 'sessions', '.venv', '.venvs', '__pycache__', 'external_content', 'user_personalities'}
 FORBIDDEN_SUFFIXES = {'.sqlite', '.sqlite3', '.db', '.pcm', '.wav', '.mp3', '.mp4', '.pem', '.key', '.log', '.zip', '.gz'}
 
 def inspect(path, data=None):
@@ -22,11 +26,15 @@ def inspect(path, data=None):
         findings.append('archivo privado o generado')
     if path.name.startswith('.env') and path.name != '.env.example':
         findings.append('configuración privada')
-    if path.name in {'portal_config.json', 'profile_toolsets.json', 'startup_settings.json'}:
+    if path.name in {'config.json', 'storage_state.json', 'client_secret.json', 'portal_config.json', 'profile_toolsets.json', 'startup_settings.json'}:
         findings.append('configuración de una instalación')
     data = path.read_bytes() if data is None else data
     if len(data) > 10 * 1024 * 1024:
         findings.append('archivo grande no revisado')
+    if rel.as_posix() in REVIEWED_ASSETS:
+        if hashlib.sha256(data).hexdigest() != REVIEWED_ASSETS[rel.as_posix()]:
+            findings.append('recurso estático modificado: requiere revisión')
+        return findings
     try:
         value = data.decode('utf-8')
     except UnicodeError:

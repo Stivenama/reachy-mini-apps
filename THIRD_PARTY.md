@@ -4,5 +4,6 @@
 - El SDK Reachy Mini, las bibliotecas de movimientos y el resto de paquetes Python se instalan como dependencias, conservando sus propias licencias. Referencia del SDK: https://github.com/pollen-robotics/reachy_mini.
 - El modelo español Vosk se descarga desde su distribuidor oficial mediante el instalador; sus pesos no están en el repositorio.
 - Los inventarios de entornos registran paquetes instalados, no conceden derechos sobre ellos.
+- Asistente de clase conserva sus archivos de interfaz originales, incluida la tipografía Ancizar Sans. Las bibliotecas Google, Playwright y notebooklm-py se instalan como dependencias y mantienen sus propias licencias; notebooklm-py es una integración no oficial.
 
 La carpeta de desarrollo del Hub recuperada del robot no contenía un archivo de licencia completo. No se asigna una licencia global que suplante la de sus componentes. Conservar el repositorio privado y revisar la procedencia y las licencias originales antes de redistribuirlo públicamente.

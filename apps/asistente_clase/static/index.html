@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Asistente de Clase</title>
+<link rel="stylesheet" href="static/fonts/ancizar.css">
+<link rel="stylesheet" href="static/style.css">
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">AC</span>
+      <div class="brand-text">
+        <h1>Asistente de Clase</h1>
+        <p class="tagline">Transcripción, investigación y materiales para Classroom</p>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <label class="account-field">
+        <span>Cuenta</span>
+        <select id="account"></select>
+      </label>
+      <button id="relogin" class="btn btn-ghost">Reconectar</button>
+      <button id="add-account" class="btn btn-ghost">Agregar cuenta</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="column">
+      <div class="card">
+        <h2 class="step-title"><span class="step-num">1</span> Archivo de la clase</h2>
+        <div class="field">
+          <input id="txt-search" class="input" type="search" placeholder="Buscar transcripción por nombre…">
+          <select id="txt" size="6" class="listbox"></select>
+        </div>
+        <p id="txt-meta" class="hint"></p>
+      </div>
+
+      <div class="card">
+        <h2 class="step-title"><span class="step-num">2</span> Destino</h2>
+        <div class="field">
+          <label for="notebook">Notebook</label>
+          <div class="row">
+            <select id="notebook"></select>
+            <button id="new-notebook" class="btn btn-ghost btn-sm">Crear</button>
+          </div>
+        </div>
+        <div class="field">
+          <label for="course">Curso de Classroom</label>
+          <select id="course"></select>
+        </div>
+        <div class="field">
+          <label for="topic">Tema</label>
+          <div class="row">
+            <select id="topic"></select>
+            <button id="new-topic" class="btn btn-ghost btn-sm">Crear</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2 class="step-title"><span class="step-num">3</span> Materiales</h2>
+        <div class="toggles">
+          <label class="toggle">
+            <input type="checkbox" id="chk-report" checked>
+            <span class="toggle-body"><span class="toggle-title">Informe</span><span class="toggle-desc">Documento estructurado de la clase</span></span>
+          </label>
+          <label class="toggle">
+            <input type="checkbox" id="chk-infographic" checked>
+            <span class="toggle-body"><span class="toggle-title">Infografía</span><span class="toggle-desc">Resumen visual de una página</span></span>
+          </label>
+          <label class="toggle">
+            <input type="checkbox" id="chk-video" checked>
+            <span class="toggle-body"><span class="toggle-title">Video</span><span class="toggle-desc">Repaso narrado de la clase</span></span>
+          </label>
+          <label class="toggle">
+            <input type="checkbox" id="chk-transcript">
+            <span class="toggle-body"><span class="toggle-title">Transcripción original</span><span class="toggle-desc">Archivo de texto de la sesión</span></span>
+          </label>
+        </div>
+        <p class="note">La investigación de fuentes complementarias (un texto y un video) se realiza siempre.</p>
+
+        <div class="field">
+          <label>Publicación en Classroom</label>
+          <div class="segmented">
+            <label><input type="radio" name="publish" value="draft" checked><span>Borrador</span></label>
+            <label><input type="radio" name="publish" value="published"><span>Publicado</span></label>
+          </div>
+        </div>
+
+        <button id="process" class="btn btn-primary btn-block">Procesar clase</button>
+        <p id="message" class="message" role="status" aria-live="polite"></p>
+      </div>
+    </section>
+
+    <section class="column">
+      <div class="card">
+        <h2>Estado del procesamiento</h2>
+        <p id="live-empty" class="hint">Cuando proceses una clase verás aquí el avance de cada etapa.</p>
+        <ol id="live-steps" class="pipeline"></ol>
+        <div id="live-actions" class="actions"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>Clases procesadas</h2>
+          <div class="filters" id="filters">
+            <button class="chip active" data-filter="all">Todas</button>
+            <button class="chip" data-filter="running">En curso</button>
+            <button class="chip" data-filter="done">Listas</button>
+            <button class="chip" data-filter="error">Con error</button>
+          </div>
+        </div>
+        <div id="classes" class="classes"></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div id="modal" class="modal" hidden>
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal-head">
+      <h2 id="modal-title">Agregar cuenta</h2>
+      <button id="close-add" class="btn btn-ghost btn-sm">Cerrar</button>
+    </div>
+    <p class="hint">Antes de empezar, agrega el correo como <strong>usuario de prueba</strong> en Google Cloud, en Google Auth Platform &rarr; Público. Se abrirán dos ventanas del navegador: el inicio de sesión de Gemini Notebook y la autorización de Google.</p>
+    <div class="field">
+      <label for="new-email">Correo de la cuenta</label>
+      <input id="new-email" class="input" type="email" placeholder="profesor@example.com">
+    </div>
+    <div class="actions">
+      <button id="start-add" class="btn btn-primary">Iniciar alta</button>
+      <span id="add-message" class="message"></span>
+    </div>
+    <pre id="add-log" class="log" aria-live="polite"></pre>
+  </div>
+</div>
+
+<div id="toasts" class="toasts" aria-live="polite"></div>
+
+<script src="static/app.js"></script>
+</body>
+</html>

@@ -43,3 +43,10 @@ dist/
 .ruff_cache/
 classroom_models/
 models/
+secrets/
+.notebooklm/
+storage_state.json
+client_secret*.json
+apps/asistente_clase/config.json
+apps/asistente_clase/data/
+apps/asistente_clase/descargas/

@@ -1,0 +1,19 @@
+{
+  "profiles": {
+    "personal": {
+      "label": "Personal",
+      "notebooklm_profile": "default",
+      "google_token": "secrets/token.json"
+    }
+  },
+  "active_profile": "personal",
+  "transcripts_dir": "transcripciones",
+  "client_secret": "secrets/client_secret.json",
+  "drive_root": "Reachy Classes",
+  "default_topic": "Material de clases",
+  "language": "es",
+  "port": 8100,
+  "report_timeout": 900,
+  "infographic_timeout": 900,
+  "video_timeout": 2400
+}
