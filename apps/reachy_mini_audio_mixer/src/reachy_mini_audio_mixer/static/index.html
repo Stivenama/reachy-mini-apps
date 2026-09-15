@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark light" />
+    <title>Reachy · Audio Mixer</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <main class="mixer">
+      <header class="mixer__header">
+        <span class="mixer__icon" aria-hidden="true">🔊</span>
+        <div>
+          <h1>Audio Mixer</h1>
+          <p>Elige dónde suena Reachy</p>
+        </div>
+      </header>
+
+      <section class="mixer__devices" aria-label="Dispositivos de salida">
+        <button type="button" class="device" data-device="internal">
+          <span class="device__icon" aria-hidden="true">🔈</span>
+          <span class="device__body">
+            <span class="device__name">Parlante interno</span>
+            <span class="device__detail">Reachy Mini Audio (tarjeta 0)</span>
+          </span>
+          <span class="device__check" aria-hidden="true">✓</span>
+        </button>
+        <button type="button" class="device" data-device="external">
+          <span class="device__icon" aria-hidden="true">🔉</span>
+          <span class="device__body">
+            <span class="device__name">USB-C externo</span>
+            <span class="device__detail">AB13X USB Audio (tarjeta 3)</span>
+          </span>
+          <span class="device__check" aria-hidden="true">✓</span>
+        </button>
+      </section>
+
+      <section class="mixer__volume">
+        <div class="mixer__volume-head">
+          <label for="volume">Volumen</label>
+          <output id="volume-value">--</output>
+        </div>
+        <input id="volume" type="range" min="0" max="100" step="1" value="50" />
+        <div class="mixer__actions">
+          <button type="button" id="test" class="btn">🔊 Sonido de prueba</button>
+        </div>
+      </section>
+
+      <p id="status" class="mixer__status" role="status" aria-live="polite"></p>
+      <p class="mixer__hint">
+        El cambio se aplica la próxima vez que abras <strong>Push to Talk</strong>.
+      </p>
+    </main>
+    <script type="module" src="/static/main.js"></script>
+  </body>
+</html>

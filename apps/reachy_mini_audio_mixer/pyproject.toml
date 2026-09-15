@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "reachy_mini_audio_mixer"
+version = "1.0.0"
+description = "Cambia el dispositivo de salida de audio del Reachy Mini (interno o USB-C externo)."
+requires-python = ">=3.11"
+dependencies = [
+    "reachy-mini>=1.10.0",
+]
+
+[project.entry-points."reachy_mini_apps"]
+reachy_mini_audio_mixer = "reachy_mini_audio_mixer.main:ReachyMiniAudioMixerApp"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+reachy_mini_audio_mixer = [
+    "static/**/*",
+]

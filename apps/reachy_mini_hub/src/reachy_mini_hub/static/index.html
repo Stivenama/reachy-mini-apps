@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark light" />
+    <title>Reachy Hub</title>
+    <link rel="stylesheet" href="/static/style.css?v=20260902" />
+    <script type="module" src="/static/js/main.js?v=20260902"></script>
+  </head>
+  <body>
+    <header class="app-shell__header" role="banner">
+      <div class="app-shell__lead">
+        <a href="#/" class="app-shell__brand" data-action="go-home" aria-label="Reachy Hub home">
+          <span class="app-shell__brand-mark" aria-hidden="true">
+            <img src="/static/avatars/default.svg" alt="" draggable="false" />
+          </span>
+          <span class="app-shell__brand-text">Reachy Hub</span>
+        </a>
+      </div>
+      <nav class="hub__nav" aria-label="Secciones">
+        <a href="#/" class="hub__nav-btn" data-route="talk" aria-current="page">🎤 Hablar</a>
+        <a href="#/timeline" class="hub__nav-btn" data-route="timeline">🎭 Emociones</a>
+        <a href="#/chat" class="hub__nav-btn" data-route="chat">💬 Chat</a>
+      </nav>
+    </header>
+    <div class="app-shell__personality-row" data-component="personality-row" hidden>
+      <button
+        type="button"
+        class="app-shell__personality"
+        data-component="personality-badge"
+        data-action="open-personalities"
+        aria-label="Change personality"
+      >
+        <span class="app-shell__personality-avatar" aria-hidden="true">
+          <img src="/static/avatars/default.svg" alt="" draggable="false" />
+        </span>
+        <span class="app-shell__personality-text">
+          <span class="app-shell__personality-label">Personality</span>
+          <span class="app-shell__personality-name" aria-live="polite"></span>
+        </span>
+      </button>
+    </div>
+    <main id="view-outlet" class="app-shell__outlet" role="main"></main>
+  </body>
+</html>

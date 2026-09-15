@@ -1,0 +1,45 @@
+# Credenciales y configuración propia de cada instalación
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*credentials*.json
+*token*.json
+portal_config.json
+profile_toolsets.json
+startup_settings.json
+tool_settings.json
+external_content/
+user_personalities/
+memory/
+# Datos personales y grabaciones
+*.sqlite*
+*.db
+*.db-*
+*.wav
+*.pcm
+*.mp3
+*.mp4
+recordings/
+transcripciones/
+sessions/
+logs/
+*.log
+respaldos/
+*.tar*
+*.zip
+# Entornos y resultados regenerables
+.venvs/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+classroom_models/
+models/

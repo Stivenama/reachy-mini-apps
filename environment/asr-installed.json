@@ -1,0 +1,130 @@
+[
+  {
+    "name": "anyio",
+    "version": "4.15.1"
+  },
+  {
+    "name": "av",
+    "version": "18.1.0"
+  },
+  {
+    "name": "certifi",
+    "version": "2026.7.22"
+  },
+  {
+    "name": "cffi",
+    "version": "2.1.1"
+  },
+  {
+    "name": "charset-normalizer",
+    "version": "3.5.1"
+  },
+  {
+    "name": "click",
+    "version": "8.5.0"
+  },
+  {
+    "name": "ctranslate2",
+    "version": "4.8.2"
+  },
+  {
+    "name": "faster-whisper",
+    "version": "1.2.1"
+  },
+  {
+    "name": "filelock",
+    "version": "3.32.6"
+  },
+  {
+    "name": "flatbuffers",
+    "version": "25.12.19"
+  },
+  {
+    "name": "fsspec",
+    "version": "2026.7.0"
+  },
+  {
+    "name": "h11",
+    "version": "0.16.0"
+  },
+  {
+    "name": "hf-xet",
+    "version": "1.6.0"
+  },
+  {
+    "name": "httpcore",
+    "version": "1.0.9"
+  },
+  {
+    "name": "httpx",
+    "version": "0.28.1"
+  },
+  {
+    "name": "huggingface_hub",
+    "version": "1.31.0"
+  },
+  {
+    "name": "idna",
+    "version": "3.19"
+  },
+  {
+    "name": "numpy",
+    "version": "2.5.3"
+  },
+  {
+    "name": "onnxruntime",
+    "version": "1.30.0"
+  },
+  {
+    "name": "packaging",
+    "version": "26.3"
+  },
+  {
+    "name": "pip",
+    "version": "25.0.1"
+  },
+  {
+    "name": "protobuf",
+    "version": "7.36.1"
+  },
+  {
+    "name": "pycparser",
+    "version": "3.0"
+  },
+  {
+    "name": "PyYAML",
+    "version": "6.0.3"
+  },
+  {
+    "name": "requests",
+    "version": "2.34.2"
+  },
+  {
+    "name": "srt",
+    "version": "3.5.3"
+  },
+  {
+    "name": "tokenizers",
+    "version": "0.23.2"
+  },
+  {
+    "name": "tqdm",
+    "version": "4.70.1"
+  },
+  {
+    "name": "typing_extensions",
+    "version": "4.16.0"
+  },
+  {
+    "name": "urllib3",
+    "version": "2.7.0"
+  },
+  {
+    "name": "vosk",
+    "version": "0.3.45"
+  },
+  {
+    "name": "websockets",
+    "version": "17.1"
+  }
+]

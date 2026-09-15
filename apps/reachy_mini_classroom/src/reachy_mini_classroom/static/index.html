@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Reachy · Clase continua</title><link rel="stylesheet" href="static/style.css"></head>
+<body><main>
+<header><a id="portal" href="#">← Mi Reachy Portal</a><span>REACHY / AULA</span></header>
+<section class="intro"><p class="eyebrow">ESCUCHAR · GUARDAR · COMPRENDER</p><h1>Una clase.<br>Todo el contexto.</h1>
+<p>Reachy escucha en silencio. Guarda bloques de 20 minutos al detectar la siguiente pausa y resume la clase cuando pulses <strong>Responder</strong>.</p></section>
+<section class="panel"><div class="status"><span id="dot"></span><h2 id="phase" aria-live="polite">Conectando…</h2><span id="clock">00:00</span></div>
+<progress id="progress" max="1200" value="0" aria-label="Tiempo del bloque actual"></progress>
+<p id="hint">Cada bloque empieza una nueva etapa de escucha.</p>
+<p id="progress-note" class="fine" aria-live="polite" hidden></p>
+<label for="title">Nombre de la clase</label><input id="title" maxlength="160" placeholder="Ej. Biología · Fotosíntesis">
+<div class="actions"><button id="start">Iniciar nueva clase</button><button id="respond" class="primary">Responder</button><button id="pause" class="secondary">Pausar escucha</button><button id="pause-voice" class="secondary">Pausar voz</button></div>
+<aside class="live-box" aria-label="Transcripción en vivo"><div class="live-head"><strong>Transcripción en vivo</strong><span id="live-state">Español · esperando</span></div><p id="live-text" aria-live="polite">Aquí verás lo que Reachy va entendiendo. Las frases se confirman al detectar una pausa.</p><meter id="mic-level" min="0" max="0.15" value="0" aria-label="Nivel del micrófono"></meter></aside>
+<p id="error" role="alert" hidden></p><p class="fine">«Responder» detiene la escucha, guarda el último fragmento y espera todos los textos antes de hablar. Puedes cerrar esta página: la escucha continúa en el robot.</p></section>
+<section class="archive"><div class="section-head"><h2>Clases guardadas</h2><select id="sessions" aria-label="Seleccionar clase"><option value="">Sin clases</option></select></div>
+<div class="actions"><button id="resume" class="secondary">Continuar esta clase</button><a id="download" class="link" hidden>Descargar texto completo</a></div>
+<p class="fine">Solo se guarda texto. El reconocimiento en español funciona en el robot; internet se usa para el resumen y la voz. «Pausar voz» detiene la respuesta; pulsa «Responder» para leer de nuevo el resumen guardado.</p>
+<article id="summary" class="panel" hidden><h2>Resumen de la clase</h2><p id="summary-text"></p></article>
+<div id="blocks"><p class="empty">Tu primera clase aparecerá aquí.</p></div></section>
+<footer>Solo texto · Español · Movimientos del Hub · Voz bajo demanda</footer>
+</main><script src="static/app.js"></script></body></html>

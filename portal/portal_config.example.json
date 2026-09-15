@@ -1,0 +1,7 @@
+{
+  "apps": [
+    {"slug": "hub", "nombre": "Reachy Mini Hub", "tipo": "pollen", "app_name": "reachy_mini_hub", "url": "http://127.0.0.1:7863", "icono": "🤖"},
+    {"slug": "audio-mixer", "nombre": "Audio Mixer", "tipo": "propia", "app_name": "reachy_mini_audio_mixer", "url": "http://127.0.0.1:7862", "icono": "🔊"},
+    {"slug": "classroom", "nombre": "Clase continua", "tipo": "propia", "app_name": "reachy_mini_classroom", "url": "http://127.0.0.1:8093", "icono": "📚"}
+  ]
+}

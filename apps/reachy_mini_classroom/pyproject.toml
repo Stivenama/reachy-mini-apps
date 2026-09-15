@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "reachy_mini_classroom"
+version = "0.2.4"
+description = "Escucha de clases por bloques, archivo persistente y resumen bajo demanda"
+requires-python = ">=3.11"
+dependencies = ["reachy-mini>=1.10.0rc2", "reachy_mini_hub", "fastapi", "httpx", "openai", "numpy"]
+
+[project.entry-points."reachy_mini_apps"]
+reachy_mini_classroom = "reachy_mini_classroom.app:ClassroomApp"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+reachy_mini_classroom = ["static/*"]

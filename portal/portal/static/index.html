@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light" />
+    <meta name="theme-color" content="#0c4a34" />
+    <title>Mi Reachy · Portal de aplicaciones</title>
+    <link rel="stylesheet" href="/static/style.css?v=4" />
+  </head>
+  <body>
+    <div class="page">
+      <header class="topbar">
+        <div class="topbar__inner">
+          <div class="crest" aria-hidden="true">
+            <svg viewBox="0 0 48 48" width="42" height="42">
+              <circle cx="24" cy="24" r="22" fill="#0c4a34" />
+              <circle cx="24" cy="24" r="22" fill="none" stroke="#d9b45b" stroke-width="1.4" />
+              <text x="24" y="30" text-anchor="middle" font-family="Georgia, serif" font-size="17" fill="#f3ead2" letter-spacing="1">UN</text>
+            </svg>
+          </div>
+          <div class="topbar__titles">
+            <h1 class="topbar__title">Mi Reachy</h1>
+            <p class="topbar__subtitle">Portal de aplicaciones del aula</p>
+          </div>
+          <span class="topbar__seal">Universidad Nacional de Colombia</span>
+        </div>
+
+        <nav class="tabs" aria-label="Secciones">
+          <a href="#/apps" class="tab is-active" data-tab="apps">Aplicaciones</a>
+          <a href="#/wifi" class="tab" data-tab="wifi">Red</a>
+        </nav>
+      </header>
+
+      <main class="content">
+        <section id="view-apps" class="view">
+          <div class="intro">
+            <h2 class="intro__title">Aplicaciones</h2>
+            <p class="intro__text">
+              Seleccione una aplicación para iniciarla o abrirla. Solo puede haber
+              una aplicación activa a la vez.
+            </p>
+          </div>
+          <div id="apps" class="grid" aria-live="polite">
+            <div class="skeleton-card"></div>
+            <div class="skeleton-card"></div>
+          </div>
+        </section>
+
+        <section id="view-wifi" class="view" hidden>
+          <div class="intro">
+            <h2 class="intro__title">Red</h2>
+            <p class="intro__text">
+              Conecte el robot a la red que prefiera. El portal siempre estará en
+              <strong>http://reachy-mini.local:8090</strong> (mismo dispositivo de red).
+            </p>
+          </div>
+          <div id="wifi-content" class="wifi">
+            <div class="wifi__status panel">
+              <p class="waiting">Consultando estado de la red…</p>
+            </div>
+
+            <div class="panel wifi__actions">
+              <button type="button" id="btn-scan" class="btn btn--primary">Buscar redes</button>
+              <button type="button" id="btn-nacho" class="btn btn--ghost">Volver a NachoNacho</button>
+              <button type="button" id="btn-hotspot" class="btn btn--ghost">Crear hotspot del robot</button>
+            </div>
+
+            <div id="wifi-list" class="panel">
+              <p class="waiting">Pulse "Buscar redes" para ver las disponibles.</p>
+            </div>
+
+            <div class="panel">
+              <h3 class="panel__title">Conectar a otra red</h3>
+              <form id="wifi-manual" class="manual-form" autocomplete="off">
+                <input id="manual-ssid" type="text" placeholder="Nombre de la red (SSID)" autocomplete="off" />
+                <input id="manual-pass" type="password" placeholder="Contraseña" autocomplete="new-password" />
+                <button type="submit" class="btn btn--primary">Conectar a esta red</button>
+              </form>
+            </div>
+
+            <div id="wifi-recovery" class="panel recovery"></div>
+          </div>
+        </section>
+      </main>
+
+      <footer class="footer">
+        <span class="footer__line"></span>
+        <p class="footer__text">
+          Entorno de control del robot &mdash; accesible desde cualquier
+          dispositivo en la misma red.
+        </p>
+        <button type="button" id="btn-daemon-restart" class="footer__link" hidden>
+          Reiniciar daemon de Reachy
+        </button>
+      </footer>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+    <script src="/static/app.js?v=4"></script>
+  </body>
+</html>
