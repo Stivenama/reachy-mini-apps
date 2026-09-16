@@ -11,6 +11,7 @@ import os
 import subprocess
 import sys
 import threading
+import tempfile
 from pathlib import Path
 
 CLI = Path(sys.executable).parent / ("notebooklm.exe" if os.name == "nt" else "notebooklm")
@@ -135,10 +136,14 @@ def research_discover(profile: str, notebook_id: str, query: str, mode: str = "d
 
 def ask_notebook(profile: str, notebook_id: str, question: str, source_id: str | None = None) -> str:
     """Pregunta al notebook (chat anclado a las fuentes) y devuelve la respuesta."""
-    args = ["-p", profile, "ask", question, "--new", "--json", "-n", notebook_id]
+    args = ["-p", profile, "ask", "--new", "--json", "-n", notebook_id]
     if source_id:
         args += ["-s", source_id]
-    data = _json(_run(args, timeout=300))
+    # Long research candidate lists exceed Windows command-line limits.
+    with tempfile.TemporaryDirectory(prefix="reachy-prompt-") as folder:
+        prompt = Path(folder) / "prompt.txt"
+        prompt.write_text(question, encoding="utf-8")
+        data = _json(_run([*args, "--prompt-file", str(prompt)], timeout=300))
     return str(data.get("answer") or "").strip()
 
 
@@ -149,7 +154,14 @@ def generate(profile: str, notebook_id: str, kind: str, language: str, timeout: 
     elif kind == "infographic":
         args = ["generate", "infographic", "--language", language, "--orientation", "portrait", *tail]
     elif kind == "video":
-        args = ["generate", "video", "--language", language, "--style", "auto", *tail]
+        args = ["generate", "video",
+                "Presentación académica sobria de nivel universitario, basada principalmente en "
+                "los conceptos y explicaciones de la transcripción. Distingue lo dicho en clase "
+                "de las aportaciones de fuentes complementarias. Explica definiciones, fundamentos, "
+                "ejemplos y límites; identifica las fuentes cuando estén disponibles. No inventes "
+                "referencias ni conviertas hipótesis en hechos. Evita sensacionalismo, humor, "
+                "infantilización y afirmaciones sin respaldo. Usa diagramas claros y tono docente.",
+                "--language", language, "--style", "classic", "--format", "explainer", *tail]
     else:
         raise ValueError(f"artefacto desconocido: {kind}")
     return _json(_run(["-p", profile, *args], timeout=timeout + 120))

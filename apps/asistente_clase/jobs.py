@@ -14,6 +14,7 @@ from pathlib import Path
 import classroom_client
 import drive_client
 import notebooklm_engine as nb
+import academic_research
 import settings as S
 from google_auth import classroom_service, drive_service, get_credentials
 
@@ -82,29 +83,6 @@ def _delivery_dir(class_id: str) -> Path:
     target = DELIVERIES / class_id
     target.mkdir(parents=True, exist_ok=True)
     return target
-
-
-def _pick_research_sources(sources: list[dict]) -> tuple[dict | None, dict | None]:
-    """Elige 1 texto y 1 video (YouTube) de la investigación. Si no hay video, usa otro resultado."""
-    text = None
-    video = None
-    leftovers = []
-    for source in sources:
-        url = (source.get("url") or "").strip()
-        if not url.startswith("http"):
-            continue
-        item = {"url": url, "title": (source.get("title") or "").strip()}
-        if classroom_client.is_youtube(url) and video is None:
-            video = item
-        elif not classroom_client.is_youtube(url) and text is None:
-            text = item
-        else:
-            leftovers.append(item)
-    if text is None and leftovers:
-        text = leftovers.pop(0)
-    if video is None and leftovers:
-        video = leftovers.pop(0)
-    return text, video
 
 
 def _clean_text(text: str) -> str:
@@ -185,11 +163,12 @@ def _process(db, class_id: str) -> None:
     if _is_cancelled(class_id):
         db.update_class(class_id, status="cancelled")
         return
-    db.update_class(class_id, status="researching", research_status="running")
+    db.update_class(class_id, status="researching", research_status="running",
+                    research_text_url="", research_text_title="",
+                    research_video_url="", research_video_title="")
     try:
-        query = f"{row['title']} explicación, artículo y video en español"
-        found = nb.research_discover(nbp, notebook_id, query)
-        text_src, video_src = _pick_research_sources(found)
+        text_src, video_src = academic_research.discover(
+            nbp, notebook_id, source_id, cancelled=lambda: _is_cancelled(class_id))
         if text_src:
             research["text_url"], research["text_title"] = text_src["url"], text_src["title"]
             try:
@@ -204,7 +183,7 @@ def _process(db, class_id: str) -> None:
                 pass
         db.update_class(
             class_id,
-            research_status="ready",
+            research_status="ready" if text_src and video_src else "partial" if text_src or video_src else "not_found",
             research_text_url=research["text_url"],
             research_text_title=research["text_title"],
             research_video_url=research["video_url"],

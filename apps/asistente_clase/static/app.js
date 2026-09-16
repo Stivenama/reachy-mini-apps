@@ -5,11 +5,11 @@ const LABELS = {
   pending: "Pendiente", queued: "En cola", running: "Procesando", uploading: "Subiendo fuente",
   researching: "Investigando fuentes", analyzing: "Analizando pendientes", generating: "Generando",
   publishing: "Publicando", done: "Listo", partial: "Parcial", failed: "Error", ready: "Listo",
-  skipped: "Omitido", cancelled: "Cancelado",
+  skipped: "Omitido", cancelled: "Cancelado", not_found: "Sin fuentes académicas adecuadas",
 };
 const PIPELINE = [
   { key: "source", label: "Fuente en Gemini Notebook" },
-  { key: "research", label: "Investigación de fuentes" },
+  { key: "research", label: "Fuentes académicas según el contenido" },
   { key: "pending", label: "Pendientes para la próxima clase" },
   { key: "report", label: "Informe" },
   { key: "infographic", label: "Infografía" },
