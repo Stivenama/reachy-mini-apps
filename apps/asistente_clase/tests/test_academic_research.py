@@ -33,10 +33,36 @@ class ResearchTests(unittest.TestCase):
                 ask.assert_not_called()
 
     def test_local_path_used_in_discovery(self):
-        with patch.object(research, 'transcript_topics', return_value=['templabilidad']) as local, patch.object(research, '_remote_topics') as remote, patch.object(research, '_discover_topics', return_value=(None, None)):
+        with patch.object(nb, 'wait_source'), patch.object(research, 'transcript_topics', return_value=['templabilidad']) as local, patch.object(research, '_remote_topics', return_value=[]) as remote, patch.object(research, '_discover_topics', return_value=(None, None)):
             research.discover('p', 'n', 's', transcript_path='clase.txt')
             local.assert_called_once()
-            remote.assert_not_called()
+            remote.assert_called_once()
+
+    def test_indexed_source_avoids_hundreds_of_requests(self):
+        with patch.object(nb, 'wait_source') as wait, patch.object(research, '_remote_topics', return_value=['acero']), patch.object(research, 'transcript_topics') as local, patch.object(research, '_discover_topics', return_value=(None, None)):
+            research.discover('p', 'n', 's', transcript_path='clase.txt')
+            wait.assert_called_once()
+            local.assert_not_called()
+
+    def test_structured_cli_error_is_visible(self):
+        message = nb._error_detail('{"error":true,"code":"NOTEBOOKLM_ERROR","message":"question too large"}', '')
+        self.assertIn('question too large', message)
+
+    def test_candidate_selection_has_bounded_prompt_and_original_url(self):
+        url = 'https://openstax.org/books/' + 'a' * 2000
+        candidates = [{'url': url, 'title': 'Book', 'description': 'Academic textbook', 'kind': 'text'}]
+        with patch.object(nb, 'ask_notebook', return_value='{"text":{"id":0,"evidence":"textbook"},"video":null}') as ask:
+            text, _ = research._select('p', 'n', 's', 'x' * 2000, candidates)
+        self.assertLess(len(ask.call_args.args[2]), 3000)
+        self.assertEqual(text['url'], url)
+
+    def test_all_chunk_prompts_fit_server_budget(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'long.txt'
+            path.write_text('Información académica. ' * 2000, encoding='utf-8')
+            with patch.object(nb, 'ask_notebook', return_value='{"topics":["acero"]}') as ask:
+                research.transcript_topics('p', 'n', 's', path, lambda: False)
+            self.assertTrue(all(len(c.args[2]) < 3000 for c in ask.call_args_list))
 
     def run_search(self, results, choice):
         plan = json.dumps({'topics': ['temple y templabilidad', 'transformaciones del acero']})

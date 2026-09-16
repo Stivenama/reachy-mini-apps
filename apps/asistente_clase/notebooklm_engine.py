@@ -20,6 +20,27 @@ _current = None
 _current_lock = threading.Lock()
 
 
+def _error_detail(out: str, err: str) -> str:
+    """Preserve structured CLI errors instead of showing only the closing brace."""
+    for raw in (out, err):
+        try:
+            data = json.loads(raw)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(data, dict):
+            error = data.get('error')
+            if not isinstance(error, (dict, str)):
+                error = data
+            if isinstance(error, dict):
+                message = error.get('message') or error.get('detail')
+                code = error.get('code') or error.get('type') or ''
+                if message:
+                    return f'{code}: {message}'.strip(': ')[:1400]
+            elif isinstance(error, str):
+                return error[:1400]
+    return (err or out or 'El comando de NotebookLM falló').strip()[-1400:]
+
+
 def _run(args: list[str], timeout: int = 600) -> str:
     global _current
     if not CLI.exists():
@@ -48,9 +69,7 @@ def _run(args: list[str], timeout: int = 600) -> str:
         with _current_lock:
             _current = None
     if process.returncode != 0:
-        detail = (err or out or "").strip()
-        lines = [line for line in detail.splitlines() if line.strip()]
-        detail = lines[-1] if lines else detail
+        detail = _error_detail(out, err)
         if "GET_NOTEBOOK" in detail or "rpc_code=5" in detail:
             raise RuntimeError("El notebook no existe o no tienes acceso a él (fue eliminado).")
         if "Authentication expired" in detail or "notebooklm login" in detail:
@@ -132,6 +151,11 @@ def research_discover(profile: str, notebook_id: str, query: str, mode: str = "d
         )
     )
     return data.get("sources", []) or []
+
+
+def wait_source(profile: str, notebook_id: str, source_id: str) -> None:
+    _run(['-p', profile, 'source', 'wait', source_id, '-n', notebook_id,
+          '--timeout', '120', '--json'], timeout=140)
 
 
 def ask_notebook(profile: str, notebook_id: str, question: str, source_id: str | None = None) -> str:
