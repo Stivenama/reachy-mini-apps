@@ -168,7 +168,8 @@ def _process(db, class_id: str) -> None:
                     research_video_url="", research_video_title="")
     try:
         text_src, video_src = academic_research.discover(
-            nbp, notebook_id, source_id, cancelled=lambda: _is_cancelled(class_id))
+            nbp, notebook_id, source_id, cancelled=lambda: _is_cancelled(class_id),
+            transcript_path=row["txt_path"])
         if text_src:
             research["text_url"], research["text_title"] = text_src["url"], text_src["title"]
             try:

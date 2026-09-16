@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 import sys
 import unittest
+import tempfile
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -10,6 +11,33 @@ import notebooklm_engine as nb
 
 
 class ResearchTests(unittest.TestCase):
+    def test_local_text_covers_start_and_end_without_source_context(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'misleading-title.txt'
+            path.write_text('INICIO temple ' + 'acero ' * 2500 + ' FINAL enfriamiento', encoding='utf-8')
+            with patch.object(nb, 'ask_notebook', return_value='{"topics":["temple del acero"]}') as ask:
+                topics = research.transcript_topics('p', 'n', 's', path, lambda: False)
+            prompts = '\n'.join(c.args[2] for c in ask.call_args_list)
+            self.assertIn('INICIO temple', prompts)
+            self.assertIn('FINAL enfriamiento', prompts)
+            self.assertNotIn('misleading-title', prompts)
+            self.assertEqual(topics, ['temple del acero'])
+
+    def test_empty_local_file_does_not_call_provider(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'empty.txt'
+            path.write_text('', encoding='utf-8')
+            with patch.object(nb, 'ask_notebook') as ask:
+                with self.assertRaises(ValueError):
+                    research.transcript_topics('p', 'n', 's', path, lambda: False)
+                ask.assert_not_called()
+
+    def test_local_path_used_in_discovery(self):
+        with patch.object(research, 'transcript_topics', return_value=['templabilidad']) as local, patch.object(research, '_remote_topics') as remote, patch.object(research, '_discover_topics', return_value=(None, None)):
+            research.discover('p', 'n', 's', transcript_path='clase.txt')
+            local.assert_called_once()
+            remote.assert_not_called()
+
     def run_search(self, results, choice):
         plan = json.dumps({'topics': ['temple y templabilidad', 'transformaciones del acero']})
         with patch.object(nb, 'ask_notebook', side_effect=[plan, json.dumps(choice)]) as ask, patch.object(nb, 'research_discover', return_value=results) as search:

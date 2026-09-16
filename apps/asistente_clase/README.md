@@ -43,13 +43,13 @@ Se conserva la tipografía estática Ancizar Sans de la interfaz original; ver t
 
 ### Investigación académica basada en el TXT
 
-La búsqueda extrae primero entre 3 y 6 temas del contenido de la fuente de transcripción, restringiendo la consulta a su identificador en NotebookLM. El título del archivo no se usa como consulta. Después busca por separado documentos académicos y videos docentes. Prioriza editoriales, repositorios universitarios, artículos y libros, y filtra la relevancia con respecto a la transcripción. Si no logra extraer temas, informa del fallo y no vuelve a buscar solo por título.
+La búsqueda lee directamente el TXT local completo en fragmentos de hasta 12.000 caracteres y envía esos fragmentos como texto de la consulta. Extrae los temas de cada fragmento y los agrupa en hasta 6 ejes. Así no depende de que NotebookLM recupere pasajes de la fuente remota. Si falla un fragmento, informa del fallo en vez de investigar con una transcripción incompleta. El título del archivo no se usa como consulta. Después busca por separado documentos académicos y videos docentes. Prioriza editoriales, repositorios universitarios, artículos y libros, y filtra la relevancia con respecto a la transcripción. Si no logra extraer temas, informa del fallo y no vuelve a buscar solo por título.
 
 No es una conexión directa a Google Scholar ni una garantía de revisión por pares. Los resultados proceden de la investigación de NotebookLM; los dominios académicos y los metadatos son indicios de procedencia, no una verificación del contenido completo. Se omiten enlaces genéricos y videos sin indicios suficientes de autoría académica. La interfaz indica si no se encuentran fuentes adecuadas o solo se obtiene una de las dos. Mantiene como máximo un texto y un video complementarios por clase.
 
 El video generado usa estilo clásico y una instrucción de exposición académica, distinguiendo la clase de las aportaciones externas. Las opciones se comprobaron en la ayuda del CLI instalado y en la [documentación del proyecto notebooklm-py](https://github.com/teng-lin/notebooklm-py). Las consultas largas se pasan mediante un archivo temporal que se elimina al terminar para evitar el límite de comandos de Windows.
 
-Las nueve pruebas de regresión de `tests/test_academic_research.py` verifican consultas basadas en contenido, filtros, ausencia de sustitutos incorrectos, cancelación y limpieza de consultas temporales. Usan respuestas simuladas: no validan la calidad de una generación real ni publican en Drive o Classroom.
+Las doce pruebas de regresión de `tests/test_academic_research.py` verifican consultas basadas en contenido, filtros, ausencia de sustitutos incorrectos, cancelación y limpieza de consultas temporales. Usan respuestas simuladas: no validan la calidad de una generación real ni publican en Drive o Classroom.
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
