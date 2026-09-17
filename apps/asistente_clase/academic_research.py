@@ -5,6 +5,8 @@ from pathlib import Path
 from urllib.parse import urlsplit, parse_qs
 
 import notebooklm_engine as nb
+import settings
+import video_search
 
 ACADEMIC_DOMAINS = (
     'doi.org', 'scielo.org', 'scielo.br', 'redalyc.org', 'dialnet.unirioja.es',
@@ -37,8 +39,19 @@ def is_video(url):
     p = urlsplit(url)
     if host == 'youtu.be':
         return bool(re.fullmatch(r'[\w-]{11}', p.path.strip('/')))
-    return host in ('youtube.com', 'm.youtube.com') and p.path == '/watch' and bool(
-        re.fullmatch(r'[\w-]{11}', parse_qs(p.query).get('v', [''])[0]))
+    if host not in ('youtube.com', 'm.youtube.com', 'music.youtube.com'):
+        return False
+    if p.path == '/watch':
+        return bool(re.fullmatch(r'[\w-]{11}', parse_qs(p.query).get('v', [''])[0]))
+    return bool(re.fullmatch(r'/(?:shorts|embed|live)/[\w-]{11}/?', p.path))
+
+
+def canonical_video(url):
+    if not is_video(url):
+        return ''
+    p = urlsplit(url)
+    video_id = parse_qs(p.query).get('v', [''])[0] if p.path == '/watch' else p.path.rstrip('/').split('/')[-1]
+    return 'https://www.youtube.com/watch?v=' + video_id
 
 
 def academic_host(url):
@@ -127,7 +140,7 @@ def _discover_topics(profile, notebook_id, source_id, topics, cancelled, progres
          'artículos, libros o capítulos, con autoría identificable. Priorizar SciELO, Redalyc, '
          'editoriales y repositorios universitarios. Excluir noticias, blogs y buscadores. '
          'Preferir español; aceptar inglés.'),
-        ('video', 1, f'{context}. Buscar un video de YouTube que explique estos temas. '
+        ('video', 1, f'site:youtube.com/watch {"; ".join(topics[:2])}. Buscar un video de YouTube que explique alguno de estos temas. '
          'Aceptar tutoriales y divulgadores independientes sin exigir afiliación académica. '
          'Preferir español. Excluir publicidad y contenido ajeno al tema.')
     ]
@@ -139,7 +152,11 @@ def _discover_topics(profile, notebook_id, source_id, topics, cancelled, progres
             return None, None
         try:
             progress('Buscando 1 documento académico…' if kind == 'text' else 'Buscando 1 video relacionado…')
-            found = nb.research_discover(profile, notebook_id, query)
+            if kind == 'video' and settings.load().get('youtube_direct_search', False):
+                candidate = video_search.search(topics[0])
+                found = [candidate] if candidate else []
+            else:
+                found = nb.research_discover(profile, notebook_id, query)
         except Exception as error:
             errors.append(str(error))
             continue
@@ -153,6 +170,8 @@ def _discover_topics(profile, notebook_id, source_id, topics, cancelled, progres
                 continue
             if kind == 'video' and not is_video(url):
                 continue
+            if kind == 'video':
+                url = canonical_video(url)
             seen.add(url)
             picked.append({'url': url, 'title': str(item.get('title') or '').strip(), 'kind': kind})
             if len(picked) == limit:

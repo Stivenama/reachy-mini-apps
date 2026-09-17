@@ -35,6 +35,10 @@ El asistente lee esa carpeta y permite seleccionar la clase y sus opciones de pr
 
 ## Archivos que permanecen privados
 
+La opción local `youtube_direct_search: true` en `config.json` permite buscar un video directamente en la página pública de YouTube usando únicamente el primer tema extraído, sin enviar el TXT ni credenciales. Solo debe habilitarse tras autorización del usuario para ese destino; por defecto está desactivada. La búsqueda puede fallar si YouTube cambia su página o solicita consentimiento. Se conserva el enlace completo y no se inventan resultados.
+
+Los mensajes de investigación permanecen visibles al terminar. Los fallos de importación a NotebookLM ya no se ocultan ni se marcan como éxito completo.
+
 `secrets/`, `config.json`, `data/`, `descargas/`, `transcripciones/`, registros y el entorno `.venv/` están excluidos. NotebookLM puede guardar su sesión fuera de esta carpeta: tampoco se debe subir. El prototipo antiguo con una clase y un identificador real de Classroom se omite; la aplicación actual incluye esas funciones de forma configurable.
 
 Se conserva la tipografía estática Ancizar Sans de la interfaz original; ver también la nota de procedencia del repositorio. La copia publicada normaliza las rutas de transcripciones y los ejemplos de cuentas; no modifica la aplicación instalada.

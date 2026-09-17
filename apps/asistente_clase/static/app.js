@@ -292,7 +292,7 @@ function renderClasses() {
       body.append(error);
     }
 
-    if (row.status === "researching" && row.research_progress) {
+    if (row.research_progress) {
       const progress = document.createElement("p");
       progress.className = "hint";
       progress.textContent = row.research_progress;

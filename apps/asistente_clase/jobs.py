@@ -168,6 +168,7 @@ def _process(db, class_id: str) -> None:
                     research_text_url="", research_text_title="",
                     research_video_url="", research_video_title="")
     try:
+        import_errors = []
         text_src, video_src = academic_research.discover(
             nbp, notebook_id, source_id, cancelled=lambda: _is_cancelled(class_id),
             transcript_path=row["txt_path"],
@@ -177,18 +178,21 @@ def _process(db, class_id: str) -> None:
             research["text_url"], research["text_title"] = text_src["url"], text_src["title"]
             try:
                 nb.add_url_source(nbp, notebook_id, text_src["url"])
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as error:  # noqa: BLE001
+                import_errors.append('No se pudo importar el documento: ' + str(error)[:400])
         if video_src:
             db.update_class(class_id, research_progress="Video encontrado; añadiéndolo a NotebookLM…")
             research["video_url"], research["video_title"] = video_src["url"], video_src["title"]
             try:
                 nb.add_url_source(nbp, notebook_id, video_src["url"])
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as error:  # noqa: BLE001
+                import_errors.append('No se pudo importar el video: ' + str(error)[:400])
         db.update_class(
             class_id,
-            research_status="ready" if text_src and video_src else "partial" if text_src or video_src else "not_found",
+            research_status="ready" if text_src and video_src and not import_errors else "partial" if text_src or video_src else "not_found",
+            research_progress=('; '.join(import_errors) if import_errors else
+                               f'Fuentes: {int(text_src is not None)} documento y {int(video_src is not None)} video.' +
+                               (' No se encontró un video compatible en esta búsqueda.' if not video_src else '')),
             research_text_url=research["text_url"],
             research_text_title=research["text_title"],
             research_video_url=research["video_url"],
