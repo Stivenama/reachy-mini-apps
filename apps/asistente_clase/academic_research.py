@@ -5,8 +5,6 @@ from pathlib import Path
 from urllib.parse import urlsplit, parse_qs
 
 import notebooklm_engine as nb
-import settings
-import video_search
 
 ACADEMIC_DOMAINS = (
     'doi.org', 'scielo.org', 'scielo.br', 'redalyc.org', 'dialnet.unirioja.es',
@@ -140,7 +138,7 @@ def _discover_topics(profile, notebook_id, source_id, topics, cancelled, progres
          'artículos, libros o capítulos, con autoría identificable. Priorizar SciELO, Redalyc, '
          'editoriales y repositorios universitarios. Excluir noticias, blogs y buscadores. '
          'Preferir español; aceptar inglés.'),
-        ('video', 1, f'site:youtube.com/watch {"; ".join(topics[:2])}. Buscar un video de YouTube que explique alguno de estos temas. '
+        ('video', 1, f'Videos de YouTube: {topics[0][:250]}. Solo enlaces youtube.com/watch o youtu.be, en español. '
          'Aceptar tutoriales y divulgadores independientes sin exigir afiliación académica. '
          'Preferir español. Excluir publicidad y contenido ajeno al tema.')
     ]
@@ -152,11 +150,8 @@ def _discover_topics(profile, notebook_id, source_id, topics, cancelled, progres
             return None, None
         try:
             progress('Buscando 1 documento académico…' if kind == 'text' else 'Buscando 1 video relacionado…')
-            if kind == 'video' and settings.load().get('youtube_direct_search', False):
-                candidate = video_search.search(topics[0])
-                found = [candidate] if candidate else []
-            else:
-                found = nb.research_discover(profile, notebook_id, query)
+            found = nb.research_discover(profile, notebook_id, query,
+                                         mode='video' if kind == 'video' else 'default')
         except Exception as error:
             errors.append(str(error))
             continue

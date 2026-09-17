@@ -35,7 +35,7 @@ El asistente lee esa carpeta y permite seleccionar la clase y sus opciones de pr
 
 ## Archivos que permanecen privados
 
-La opción local `youtube_direct_search: true` en `config.json` permite buscar un video directamente en la página pública de YouTube usando únicamente el primer tema extraído, sin enviar el TXT ni credenciales. Solo debe habilitarse tras autorización del usuario para ese destino; por defecto está desactivada. La búsqueda puede fallar si YouTube cambia su página o solicita consentimiento. Se conserva el enlace completo y no se inventan resultados.
+La búsqueda del video se realiza exclusivamente dentro de NotebookLM mediante `source add-research --mode fast`, con consulta de videos de YouTube y sin `--import-all`. Se selecciona un enlace de video válido, se importa individualmente y se espera a que termine de procesarse. El documento usa la búsqueda habitual de NotebookLM. No se consulta directamente la página de YouTube desde la aplicación.
 
 Los mensajes de investigación permanecen visibles al terminar. Los fallos de importación a NotebookLM ya no se ocultan ni se marcan como éxito completo.
 
@@ -55,7 +55,7 @@ No es una conexión directa a Google Scholar ni una garantía de revisión por p
 
 El video generado usa estilo clásico y una instrucción de exposición académica, distinguiendo la clase de las aportaciones externas. Las opciones se comprobaron en la ayuda del CLI instalado y en la [documentación del proyecto notebooklm-py](https://github.com/teng-lin/notebooklm-py). Las consultas largas se pasan mediante un archivo temporal que se elimina al terminar para evitar el límite de comandos de Windows.
 
-Las dieciséis pruebas de regresión de `tests/test_academic_research.py` verifican consultas basadas en contenido, filtros, ausencia de sustitutos incorrectos, cancelación y limpieza de consultas temporales. Usan respuestas simuladas: no validan la calidad de una generación real ni publican en Drive o Classroom.
+Las diecisiete pruebas de regresión de `tests/test_academic_research.py` verifican consultas basadas en contenido, filtros, ausencia de sustitutos incorrectos, cancelación y limpieza de consultas temporales. Usan respuestas simuladas: no validan la calidad de una generación real ni publican en Drive o Classroom.
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v

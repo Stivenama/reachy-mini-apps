@@ -184,7 +184,8 @@ def _process(db, class_id: str) -> None:
             db.update_class(class_id, research_progress="Video encontrado; añadiéndolo a NotebookLM…")
             research["video_url"], research["video_title"] = video_src["url"], video_src["title"]
             try:
-                nb.add_url_source(nbp, notebook_id, video_src["url"])
+                video_source_id = nb.add_url_source(nbp, notebook_id, video_src["url"])
+                nb.wait_source(nbp, notebook_id, video_source_id)
             except Exception as error:  # noqa: BLE001
                 import_errors.append('No se pudo importar el video: ' + str(error)[:400])
         db.update_class(

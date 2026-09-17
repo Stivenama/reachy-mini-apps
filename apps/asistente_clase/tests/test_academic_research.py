@@ -8,28 +8,18 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import academic_research as research
 import notebooklm_engine as nb
-import video_search
 
 
 class ResearchTests(unittest.TestCase):
-    def setUp(self):
-        self.config = patch.object(research.settings, 'load', return_value={})
-        self.config.start()
-        self.addCleanup(self.config.stop)
-
-    def test_public_video_results_are_real_links(self):
-        payload = {'contents': [{'videoRenderer': {'videoId': 'abcdefghijk', 'title': {'runs': [{'text': 'Explicación'}]}}},
-                                {'videoRenderer': {'videoId': 'invalid', 'title': {'simpleText': 'Descartar'}}}]}
-        found = video_search.parse_results('var ytInitialData = ' + json.dumps(payload) + ';')
+    def test_video_uses_notebooklm_fast_research_without_import_all(self):
+        with patch.object(nb, '_run', return_value='{"status":"completed","sources":[{"url":"https://youtu.be/abcdefghijk"}]}') as run:
+            found = nb.research_discover('p', 'n', 'tema', mode='video')
+        args = run.call_args.args[0]
+        self.assertIn('add-research', args)
+        self.assertEqual(args[args.index('--mode') + 1], 'fast')
+        self.assertNotIn('--import-all', args)
         self.assertEqual(len(found), 1)
-        self.assertEqual(found[0]['url'], 'https://www.youtube.com/watch?v=abcdefghijk')
 
-    def test_direct_youtube_requires_configuration(self):
-        with patch.object(research.settings, 'load', return_value={'youtube_direct_search': True}), patch.object(video_search, 'search', return_value={'url': 'https://www.youtube.com/watch?v=abcdefghijk', 'title': 'Tutorial'}) as direct, patch.object(nb, 'research_discover', return_value=[] ) as search:
-            text, video = research._discover_topics('p', 'n', 's', ['acero'], lambda: False)
-        self.assertIsNotNone(video)
-        self.assertEqual(search.call_count, 1)
-        direct.assert_called_once_with('acero')
     def test_local_text_covers_start_and_end_without_source_context(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'misleading-title.txt'

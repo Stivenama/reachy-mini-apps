@@ -144,6 +144,15 @@ def add_url_source(profile: str, notebook_id: str, url: str) -> str:
 
 def research_discover(profile: str, notebook_id: str, query: str, mode: str = "default") -> list[dict]:
     """Investiga fuentes web sobre un tema y devuelve la lista clasificada."""
+    if mode == 'video':
+        # NotebookLM fast research honors video-only queries; synchronous discovery
+        # can return only text documents for the same query. Do not import all.
+        data = _json(_run(['-p', profile, 'source', 'add-research', query,
+                          '--from', 'web', '--mode', 'fast', '-n', notebook_id,
+                          '--timeout', '90', '--json'], timeout=110))
+        if data.get('status') != 'completed':
+            raise RuntimeError('NotebookLM no completó la búsqueda rápida del video.')
+        return data.get('sources', []) or []
     data = _json(
         _run(
             ["-p", profile, "research", "discover", query, "--mode", mode, "-n", notebook_id, "--json"],
