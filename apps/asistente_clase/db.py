@@ -90,6 +90,7 @@ class Database:
             columns = {row["name"] for row in db.execute("PRAGMA table_info(classes)")}
             for name in (
                 "research_status",
+                "research_progress",
                 "research_text_url",
                 "research_text_title",
                 "research_video_url",

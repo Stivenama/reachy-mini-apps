@@ -292,6 +292,13 @@ function renderClasses() {
       body.append(error);
     }
 
+    if (row.status === "researching" && row.research_progress) {
+      const progress = document.createElement("p");
+      progress.className = "hint";
+      progress.textContent = row.research_progress;
+      body.append(progress);
+    }
+
     const actions = document.createElement("div"); actions.className = "class-actions";
     if (row.drive_folder_id) {
       const link = document.createElement("a");

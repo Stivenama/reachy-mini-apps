@@ -48,13 +48,14 @@ class ResearchTests(unittest.TestCase):
         message = nb._error_detail('{"error":true,"code":"NOTEBOOKLM_ERROR","message":"question too large"}', '')
         self.assertIn('question too large', message)
 
-    def test_candidate_selection_has_bounded_prompt_and_original_url(self):
+    def test_selection_keeps_original_url_without_extra_chat(self):
         url = 'https://openstax.org/books/' + 'a' * 2000
-        candidates = [{'url': url, 'title': 'Book', 'description': 'Academic textbook', 'kind': 'text'}]
-        with patch.object(nb, 'ask_notebook', return_value='{"text":{"id":0,"evidence":"textbook"},"video":null}') as ask:
-            text, _ = research._select('p', 'n', 's', 'x' * 2000, candidates)
-        self.assertLess(len(ask.call_args.args[2]), 3000)
+        with patch.object(nb, 'ask_notebook') as ask, patch.object(nb, 'research_discover', return_value=[{'url': url, 'title': 'Book'}]) as search:
+            text, video = research._discover_topics('p', 'n', 's', ['acero'], lambda: False)
         self.assertEqual(text['url'], url)
+        self.assertIsNone(video)
+        ask.assert_not_called()
+        self.assertEqual(search.call_count, 2)
 
     def test_all_chunk_prompts_fit_server_budget(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -62,6 +63,7 @@ class ResearchTests(unittest.TestCase):
             path.write_text('Información académica. ' * 2000, encoding='utf-8')
             with patch.object(nb, 'ask_notebook', return_value='{"topics":["acero"]}') as ask:
                 research.transcript_topics('p', 'n', 's', path, lambda: False)
+            self.assertEqual(ask.call_count, 1)
             self.assertTrue(all(len(c.args[2]) < 3000 for c in ask.call_args_list))
 
     def run_search(self, results, choice):
@@ -85,9 +87,14 @@ class ResearchTests(unittest.TestCase):
         self.assertIsNotNone(result[0])
         self.assertIsNone(result[1])
 
-    def test_rejects_invented_ids_and_missing_evidence(self):
-        result, _, _ = self.run_search([{'url': 'https://doi.org/10.1234/example'}], {'text': {'id': 90, 'evidence': 'x'}, 'video': {'id': 0}})
-        self.assertEqual(result, (None, None))
+    def test_many_candidates_still_only_two_searches_and_one_each(self):
+        sources = [{'url': f'https://doi.org/10.1234/{i}', 'title': 'Paper'} for i in range(50)]
+        sources.insert(0, {'url': 'https://youtube.com/watch?v=abcdefghijk', 'title': 'Tutorial'})
+        result, ask, search = self.run_search(sources, {})
+        self.assertEqual(result[0]['url'], 'https://doi.org/10.1234/0')
+        self.assertEqual(result[1]['url'], 'https://youtube.com/watch?v=abcdefghijk')
+        self.assertEqual(ask.call_count, 1)
+        self.assertEqual(search.call_count, 2)
 
     def test_no_low_quality_results(self):
         result, _, _ = self.run_search([{'url': 'https://blog.example.com/post'}, {'url': 'https://scholar.google.com/scholar?q=steel'}], {})

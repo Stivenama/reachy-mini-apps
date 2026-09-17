@@ -43,9 +43,9 @@ Se conserva la tipografía estática Ancizar Sans de la interfaz original; ver t
 
 ### Investigación académica basada en el TXT
 
-La búsqueda espera primero a que NotebookLM termine de indexar la fuente y extrae hasta seis temas de su contenido, sin usar el título. Si no obtiene temas de la fuente, lee el TXT completo en fragmentos de 1.800 caracteres y agrupa los conceptos en tandas pequeñas. Se valida que todas las etapas usen consultas breves: un archivo temporal evita el límite de Windows, pero no elimina el límite de tamaño del servidor. La selección compara como máximo dos candidatos compactos por consulta; las URL originales se conservan para la publicación.
+La búsqueda espera a que la transcripción esté indexada y extrae sus temas. Luego hace únicamente dos búsquedas: una para un documento académico y otra para un video relacionado. Aprovecha el orden de relevancia del proveedor y filtra localmente los enlaces; no realiza rondas adicionales de comparación con el modelo. Conserva como máximo un documento y un video.
 
-La espera de indexación evita consultas sin pasajes disponibles. Si falla la investigación, el error estructurado del proveedor se muestra como mensaje legible, en lugar de una llave de cierre de JSON.
+Si NotebookLM no recupera los temas, realiza un solo intento adicional con seis fragmentos breves distribuidos entre inicio y final del TXT. Es una muestra del contenido, no un análisis íntegro de la transcripción. La interfaz muestra la etapa actual. Los tiempos de respuesta siguen dependiendo de NotebookLM y de la indexación de la fuente.
 
 No es una conexión directa a Google Scholar ni una garantía de revisión por pares. Los resultados proceden de la investigación de NotebookLM; los dominios académicos y los metadatos son indicios de procedencia, no una verificación del contenido completo. Se omiten textos genéricos. Para videos basta una relación temática clara y propósito explicativo; se admiten tutoriales y divulgadores sin afiliación académica ni bibliografía. La interfaz indica si no se encuentran fuentes adecuadas o solo se obtiene una de las dos. Mantiene como máximo un texto y un video complementarios por clase.
 

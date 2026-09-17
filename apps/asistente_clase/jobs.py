@@ -56,11 +56,12 @@ def _is_cancelled(class_id: str) -> bool:
 
 
 def start(db) -> None:
-    for class_id in db.reset_incomplete():
-        enqueue(class_id)
+    pending = set(db.reset_incomplete())
     for row in db.list_classes():
         if row["status"] in ("pending", "queued"):
-            enqueue(row["class_id"])
+            pending.add(row["class_id"])
+    for class_id in pending:
+        enqueue(class_id)
     threading.Thread(target=_loop, args=(db,), daemon=True).start()
 
 
@@ -169,14 +170,17 @@ def _process(db, class_id: str) -> None:
     try:
         text_src, video_src = academic_research.discover(
             nbp, notebook_id, source_id, cancelled=lambda: _is_cancelled(class_id),
-            transcript_path=row["txt_path"])
+            transcript_path=row["txt_path"],
+            progress=lambda message: db.update_class(class_id, research_progress=message))
         if text_src:
+            db.update_class(class_id, research_progress="Documento encontrado; añadiéndolo a NotebookLM…")
             research["text_url"], research["text_title"] = text_src["url"], text_src["title"]
             try:
                 nb.add_url_source(nbp, notebook_id, text_src["url"])
             except Exception:  # noqa: BLE001
                 pass
         if video_src:
+            db.update_class(class_id, research_progress="Video encontrado; añadiéndolo a NotebookLM…")
             research["video_url"], research["video_title"] = video_src["url"], video_src["title"]
             try:
                 nb.add_url_source(nbp, notebook_id, video_src["url"])
