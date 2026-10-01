@@ -150,6 +150,12 @@ def api_transcripts() -> JSONResponse:
     return JSONResponse({"files": files, "dir": str(folder)})
 
 
+@app.post('/api/profiles/reconnect-google')
+def api_reconnect_google(body: ActiveBody) -> JSONResponse:
+    ok, detail = accounts.reconnect_google(body.profile_id)
+    return JSONResponse({'ok': ok, 'error': '' if ok else detail})
+
+
 @app.get("/api/notebooks")
 def api_notebooks(profile_id: str) -> JSONResponse:
     config = _config()

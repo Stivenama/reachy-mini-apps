@@ -22,7 +22,8 @@
         <span>Cuenta</span>
         <select id="account"></select>
       </label>
-      <button id="relogin" class="btn btn-ghost">Reconectar</button>
+      <button id="relogin" class="btn btn-ghost">Conectar NotebookLM</button>
+      <button id="reconnect-google" class="btn btn-ghost">Conectar Classroom / Drive</button>
       <button id="add-account" class="btn btn-ghost">Agregar cuenta</button>
     </div>
   </header>
@@ -126,8 +127,8 @@
       <h2 id="modal-title">Agregar cuenta</h2>
       <button id="close-add" class="btn btn-ghost btn-sm">Cerrar</button>
     </div>
-    <p class="hint">Antes de empezar, agrega el correo como <strong>usuario de prueba</strong> en Google Cloud, en Google Auth Platform &rarr; Público. Se abrirán dos ventanas del navegador: el inicio de sesión de Gemini Notebook y la autorización de Google.</p>
-    <div class="field">
+    <p id="connection-help" class="hint">Antes de empezar, agrega el correo como <strong>usuario de prueba</strong> en Google Cloud, en Google Auth Platform &rarr; Público. Se abrirán dos ventanas del navegador: el inicio de sesión de Gemini Notebook y la autorización de Google.</p>
+    <div id="connection-email" class="field">
       <label for="new-email">Correo de la cuenta</label>
       <input id="new-email" class="input" type="email" placeholder="profesor@example.com">
     </div>

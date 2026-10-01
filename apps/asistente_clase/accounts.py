@@ -87,6 +87,39 @@ def _relogin_flow(nbp: str) -> None:
         _status.update(step="error", message=message, running=False, error=message)
 
 
+def reconnect_google(profile_id: str) -> tuple[bool, str]:
+    with _lock:
+        if _status['running']:
+            return False, 'Ya hay una conexión en curso. Termínala antes de iniciar otra.'
+        config = S.load()
+        if profile_id not in config['profiles']:
+            return False, 'Perfil desconocido.'
+        _status.update(running=True, step='google', message='Autoriza Classroom y Drive en el navegador…',
+                       email=config['profiles'][profile_id].get('label', profile_id),
+                       profile_id=profile_id, error='', log=[])
+    threading.Thread(target=_reconnect_google_flow, args=(profile_id,), daemon=True).start()
+    return True, profile_id
+
+
+def _reconnect_google_flow(profile_id: str) -> None:
+    try:
+        config = S.load()
+        profile = S.get_profile(config, profile_id)
+        label = profile.get('label', '')
+        _log('Abriendo autorización de Google. Selecciona la cuenta del perfil actual.')
+        get_credentials(S.token_path(config, profile), S.client_secret_path(config),
+                        interactive=True, force_reauth=True,
+                        login_hint=label if '@' in label else None)
+        _status.update(step='done', message='Classroom y Drive conectados.', running=False)
+        _log('Autorización guardada. Ya puedes cargar los cursos.')
+    except Exception as error:
+        message = str(error)[:500]
+        if 'NoneType' in message or 'timed out' in message.lower():
+            message = 'No se completó la autorización en tres minutos. Pulsa conectar para intentarlo otra vez.'
+        _log('No se completó la conexión: ' + message)
+        _status.update(step='error', message=message, error=message, running=False)
+
+
 def _flow(email: str, profile_id: str) -> None:
     try:
         _status.update(step="notebooklm", message="Abriendo login de Gemini Notebook…")

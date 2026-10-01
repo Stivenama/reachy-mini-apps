@@ -27,6 +27,8 @@ Las dependencias registran las versiones del entorno que funciona en el computad
 
 Cada instalación necesita su propia autorización. Los perfiles, tokens y sesiones del computador original no se incluyen.
 
+Si Google devuelve `invalid_grant` o deja de listar cursos, seleccionar el perfil y pulsar **Conectar Classroom / Drive**. Completar la autorización de Google en tres minutos; se recargarán los cursos al finalizar. Este botón renueva solo Google, independientemente de **Conectar NotebookLM**. Cancelar o fallar la autorización conserva el archivo de credenciales anterior. Los permisos de Drive y Classroom se autorizan juntos porque comparten la sesión de Google.
+
 ## Recibir los TXT de Reachy
 
 Ejecutar `iniciar_guardar_transcripcion.bat` y mantener su ventana abierta. El receptor escucha en `127.0.0.1:8765`, donde la web de Clase continua envía los textos; guarda los archivos en `transcripciones/` dentro de esta carpeta. Abrir la web del robot desde ese mismo computador.

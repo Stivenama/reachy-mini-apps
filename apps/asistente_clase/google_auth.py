@@ -8,6 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from google.auth.transport.requests import Request
+from google.auth.exceptions import RefreshError
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
@@ -29,22 +30,42 @@ def get_credentials(
     token_file: Path = TOKEN,
     client_secret: Path = CLIENT_SECRET,
     interactive: bool = True,
+    force_reauth: bool = False,
+    login_hint: str | None = None,
 ) -> Credentials:
     creds = None
-    if token_file.exists():
-        creds = Credentials.from_authorized_user_file(str(token_file), SCOPES)
+    save_required = False
+    if token_file.exists() and not force_reauth:
+        try:
+            creds = Credentials.from_authorized_user_file(str(token_file), SCOPES)
+        except (ValueError, KeyError):
+            creds = None
     if creds and creds.expired and creds.refresh_token:
-        creds.refresh(Request())
+        try:
+            creds.refresh(Request())
+            save_required = True
+        except RefreshError as error:
+            if not interactive:
+                raise RuntimeError('La sesión de Google caducó o fue revocada. Pulsa «Conectar Classroom / Drive».') from error
+            creds = None
     if not creds or not creds.valid:
         if not interactive:
             raise RuntimeError(
-                f"No hay sesión de Google válida en {token_file.name}. "
-                "Ejecuta 'agregar_cuenta.py' para autorizar esta cuenta."
+                'No hay una sesión válida de Google. Pulsa «Conectar Classroom / Drive».'
             )
         flow = InstalledAppFlow.from_client_secrets_file(str(client_secret), SCOPES)
-        creds = flow.run_local_server(port=0, prompt="consent")
+        options = {'login_hint': login_hint} if login_hint else {}
+        creds = flow.run_local_server(port=0, prompt="consent select_account",
+                                      timeout_seconds=180, **options)
+        if creds.granted_scopes is not None and not set(SCOPES).issubset(creds.granted_scopes):
+            raise RuntimeError('Faltaron permisos de Classroom o Drive. Vuelve a conectar y acepta los permisos solicitados.')
+        save_required = True
+    # Persist refreshed credentials too. A cancelled login never overwrites the old file.
+    if save_required:
         token_file.parent.mkdir(parents=True, exist_ok=True)
-        token_file.write_text(creds.to_json(), encoding="utf-8")
+        temporary = token_file.with_suffix('.tmp')
+        temporary.write_text(creds.to_json(), encoding="utf-8")
+        temporary.replace(token_file)
     return creds
 
 
