@@ -32,6 +32,7 @@ def get_credentials(
     interactive: bool = True,
     force_reauth: bool = False,
     login_hint: str | None = None,
+    authorization_callback=None,
 ) -> Credentials:
     creds = None
     save_required = False
@@ -55,8 +56,16 @@ def get_credentials(
             )
         flow = InstalledAppFlow.from_client_secrets_file(str(client_secret), SCOPES)
         options = {'login_hint': login_hint} if login_hint else {}
+        if authorization_callback:
+            original_authorization_url = flow.authorization_url
+            def publish_authorization_url(**kwargs):
+                url, state = original_authorization_url(**kwargs)
+                authorization_callback(url)
+                return url, state
+            flow.authorization_url = publish_authorization_url
         creds = flow.run_local_server(port=0, prompt="consent select_account",
-                                      timeout_seconds=180, **options)
+                                      timeout_seconds=180, open_browser=not bool(authorization_callback),
+                                      authorization_prompt_message=None, **options)
         if creds.granted_scopes is not None and not set(SCOPES).issubset(creds.granted_scopes):
             raise RuntimeError('Faltaron permisos de Classroom o Drive. Vuelve a conectar y acepta los permisos solicitados.')
         save_required = True

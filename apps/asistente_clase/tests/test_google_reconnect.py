@@ -51,6 +51,35 @@ class ReconnectTests(unittest.TestCase):
             self.assertFalse(accounts.reconnect_google('unknown')[0])
             thread.assert_not_called()
 
+    def test_reopening_active_login_resumes_without_second_thread(self):
+        with patch.dict(accounts._status, {'running': True, 'step': 'google', 'profile_id': 'test'}), patch.object(accounts.threading, 'Thread') as thread:
+            self.assertTrue(accounts.reconnect_google('test')[0])
+            self.assertFalse(accounts.reconnect_google('other')[0])
+            thread.assert_not_called()
+
+    def test_authorization_link_is_published_before_credentials_are_saved(self):
+        creds = Mock(granted_scopes=auth.SCOPES)
+        creds.to_json.return_value = 'new'
+        flow = Mock()
+        flow.authorization_url.return_value = ('https://accounts.google.com/test', 'state')
+        with tempfile.TemporaryDirectory() as folder:
+            token = Path(folder) / 'token.json'
+            token.write_text('old')
+            links = []
+            def callback(url):
+                self.assertEqual(token.read_text(), 'old')
+                links.append(url)
+            def run(**kwargs):
+                self.assertFalse(kwargs['open_browser'])
+                self.assertIsNone(kwargs['authorization_prompt_message'])
+                flow.authorization_url()
+                return creds
+            flow.run_local_server.side_effect = run
+            with patch.object(auth.InstalledAppFlow, 'from_client_secrets_file', return_value=flow):
+                auth.get_credentials(token, force_reauth=True, authorization_callback=callback)
+            self.assertEqual(links, ['https://accounts.google.com/test'])
+            self.assertEqual(token.read_text(), 'new')
+
 
 if __name__ == '__main__':
     unittest.main()

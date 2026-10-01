@@ -388,10 +388,12 @@ function openModal(mode = "add") {
   $("modal").hidden = false;
   $("add-message").textContent = "";
   $("add-log").textContent = "";
+  $("google-auth-link").hidden = true;
+  $("google-auth-link").removeAttribute("href");
   $("modal-title").textContent = mode === "google" ? "Conectar Classroom / Drive" : mode === "notebook" ? "Conectar NotebookLM" : "Agregar cuenta";
   $("connection-email").hidden = mode !== "add";
   $("start-add").hidden = mode !== "add";
-  $("connection-help").textContent = mode === "google" ? "Se abrirá Google. Selecciona la cuenta de este perfil y acepta los permisos de Classroom y Drive. Tienes tres minutos para completar la autorización." : mode === "notebook" ? "Completa el inicio de sesión de NotebookLM en el navegador." : "Se abrirán los inicios de sesión de NotebookLM y Google. Si el proyecto está en pruebas, agrega primero el correo como usuario de prueba en Google Cloud.";
+  $("connection-help").textContent = mode === "google" ? "Pulsa «Abrir autorización de Google» cuando aparezca el enlace. Selecciona la cuenta de este perfil y acepta los permisos de Classroom y Drive. Tienes tres minutos para completar la autorización." : mode === "notebook" ? "Completa el inicio de sesión de NotebookLM en el navegador." : "Se abrirán los inicios de sesión de NotebookLM y Google. Si el proyecto está en pruebas, agrega primero el correo como usuario de prueba en Google Cloud.";
 }
 function closeModal() { clearInterval(addTimer); $("modal").hidden = true; }
 
@@ -400,6 +402,12 @@ async function pollAdd() {
   addTimer = setInterval(async () => {
     try {
       const s = await api("api/profiles/status");
+      const authLink = $("google-auth-link");
+      let allowedURL = false;
+      try { allowedURL = new URL(s.authorization_url).origin === "https://accounts.google.com"; } catch (_) {}
+      authLink.hidden = !s.running || !allowedURL;
+      if (!authLink.hidden) authLink.href = s.authorization_url;
+      else authLink.removeAttribute("href");
       $("add-message").textContent = s.message || "";
       $("add-log").textContent = (s.log || []).join("\n");
       if (s.step === "done" || s.step === "error") {

@@ -20,6 +20,7 @@ _status = {
     "profile_id": "",
     "error": "",
     "log": [],
+    "authorization_url": "",
 }
 
 
@@ -48,7 +49,7 @@ def start(email: str) -> tuple[bool, str]:
             return False, f"La cuenta {email} ya está agregada."
         _status.update(
             running=True, step="starting", message="Iniciando…", email=email,
-            profile_id=profile_id, error="", log=[],
+            profile_id=profile_id, error="", log=[], authorization_url="",
         )
     _log(f"Cuenta: {email} (perfil '{profile_id}')")
     threading.Thread(target=_flow, args=(email, profile_id), daemon=True).start()
@@ -67,7 +68,7 @@ def relogin(profile_id: str) -> tuple[bool, str]:
         nbp = profile.get("notebooklm_profile", profile_id)
         _status.update(
             running=True, step="notebooklm", message="Reconectando sesión de Gemini Notebook…",
-            email=profile.get("label", profile_id), profile_id=profile_id, error="", log=[],
+            email=profile.get("label", profile_id), profile_id=profile_id, error="", log=[], authorization_url="",
         )
     _log(f"Reconectando Gemini Notebook para el perfil '{nbp}'.")
     threading.Thread(target=_relogin_flow, args=(nbp,), daemon=True).start()
@@ -90,13 +91,15 @@ def _relogin_flow(nbp: str) -> None:
 def reconnect_google(profile_id: str) -> tuple[bool, str]:
     with _lock:
         if _status['running']:
+            if _status['step'] == 'google' and _status['profile_id'] == profile_id:
+                return True, profile_id
             return False, 'Ya hay una conexión en curso. Termínala antes de iniciar otra.'
         config = S.load()
         if profile_id not in config['profiles']:
             return False, 'Perfil desconocido.'
         _status.update(running=True, step='google', message='Autoriza Classroom y Drive en el navegador…',
                        email=config['profiles'][profile_id].get('label', profile_id),
-                       profile_id=profile_id, error='', log=[])
+                       profile_id=profile_id, error='', log=[], authorization_url='')
     threading.Thread(target=_reconnect_google_flow, args=(profile_id,), daemon=True).start()
     return True, profile_id
 
@@ -106,10 +109,13 @@ def _reconnect_google_flow(profile_id: str) -> None:
         config = S.load()
         profile = S.get_profile(config, profile_id)
         label = profile.get('label', '')
-        _log('Abriendo autorización de Google. Selecciona la cuenta del perfil actual.')
+        _log('Preparando enlace de autorización de Google para este perfil.')
+        def show_authorization(url):
+            _status.update(authorization_url=url, message='Pulsa «Abrir autorización de Google» y completa el acceso.')
         get_credentials(S.token_path(config, profile), S.client_secret_path(config),
                         interactive=True, force_reauth=True,
-                        login_hint=label if '@' in label else None)
+                        login_hint=label if '@' in label else None,
+                        authorization_callback=show_authorization)
         _status.update(step='done', message='Classroom y Drive conectados.', running=False)
         _log('Autorización guardada. Ya puedes cargar los cursos.')
     except Exception as error:
@@ -118,6 +124,8 @@ def _reconnect_google_flow(profile_id: str) -> None:
             message = 'No se completó la autorización en tres minutos. Pulsa conectar para intentarlo otra vez.'
         _log('No se completó la conexión: ' + message)
         _status.update(step='error', message=message, error=message, running=False)
+    finally:
+        _status['authorization_url'] = ''
 
 
 def _flow(email: str, profile_id: str) -> None:
