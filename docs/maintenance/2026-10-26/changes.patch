@@ -1,0 +1,200 @@
+--- a/reachy_mini_classroom/src/reachy_mini_classroom/local_asr.py
++++ b/reachy_mini_classroom/src/reachy_mini_classroom/local_asr.py
+@@ -46,6 +46,9 @@
+                 except queue.Empty:continue
+                 if msg['type']=='feed':
+                     msg=dict(msg);msg['audio']=base64.b64encode(msg.pop('pcm')).decode()
++                    # Report queue pressure without dropping accepted audio. The
++                    # decoder can reduce preview work while catching up.
++                    msg['lag_seconds']=self.lag_seconds
+                 self.process.stdin.write(json.dumps(msg)+'\n');self.process.stdin.flush()
+         except (BrokenPipeError,OSError,ValueError) as exc:
+             if not self.closed.is_set():self._fail(f'El proceso de transcripción cerró su canal (código {self.process.poll()}); se conserva el texto recibido. {exc}')
+@@ -64,7 +67,12 @@
+                     with self.lock:
+                         waiter=self.waiters.get(msg['token'])
+                         if waiter:waiter.set()
+-                elif msg['type'] in ('partial','final'):self.callback(msg)
++                elif msg['type']=='final':self.callback(msg)
++                elif msg['type']=='partial' and self.lag_seconds<2:
++                    # Draft hypotheses are replaceable. Saving each one to SQLite
++                    # while behind blocks progress reads and can stall the worker's
++                    # stdout pipe. Always persist final text, never discard PCM.
++                    self.callback(msg)
+         except Exception as exc:
+             if not self.closed.is_set():self._fail(str(exc))
+         finally:
+--- a/reachy_mini_classroom/src/reachy_mini_classroom/asr_worker.py
++++ b/reachy_mini_classroom/src/reachy_mini_classroom/asr_worker.py
+@@ -17,6 +17,7 @@
+     pending=bytearray()
+     last_partial=''
+     last_check=last_progress=0.
++    backlog_seconds=0.
+     def emit(data): print(json.dumps(data,ensure_ascii=False),flush=True)
+     def progress(force=False):
+         nonlocal last_progress
+@@ -41,7 +42,7 @@
+         else:
+             now=time.monotonic()
+             # Throttle BEFORE computing the expensive lattice hypothesis.
+-            if now-last_check>=.3:
++            if now-last_check>=(1.0 if backlog_seconds>=8 else .3):
+                 last_check=now
+                 text=json.loads(rec.PartialResult()).get('partial','')
+                 if text!=last_partial:
+@@ -52,8 +53,11 @@
+     for line in sys.stdin:
+         msg=json.loads(line)
+         if msg['type']=='feed':
+-            if block is not None and msg['block']!=block and pending:
+-                consume(bytes(pending));pending.clear();final(True)
++            backlog_seconds=max(0.,float(msg.get('lag_seconds',0.)))
++            if block is not None and msg['block']!=block:
++                if pending: consume(bytes(pending));pending.clear()
++                # Finalize the old block even at an exact 100 ms packet boundary.
++                final(True)
+             block=msg['block']
+             pending.extend(base64.b64decode(msg['audio'],validate=True))
+             while len(pending)>=3200:
+--- a/reachy_mini_hub/src/reachy_mini_hub/console.py
++++ b/reachy_mini_hub/src/reachy_mini_hub/console.py
+@@ -10,6 +10,7 @@
+ import time
+ import asyncio
+ import logging
++import threading
+ from typing import Any, List, Optional
+ from pathlib import Path
+ from collections.abc import Callable
+@@ -74,6 +75,21 @@
+ _SHARED_VOICE_CONFIG = Path("/home/pollen/reachy_voice_config.json")
+ _EL_VOICES_CACHE: dict = {"ts": 0.0, "voices": []}
+ _EL_SEARCH_CACHE: dict = {"q": None, "ts": 0.0, "voices": []}
++_EL_HTTP_CLIENT = None
++_EL_HTTP_LOCK = threading.Lock()
++
++
++def _elevenlabs_client():
++    """Reuse TLS connections between speech requests; safe for worker threads."""
++    import httpx
++    global _EL_HTTP_CLIENT
++    with _EL_HTTP_LOCK:
++        if _EL_HTTP_CLIENT is None:
++            _EL_HTTP_CLIENT = httpx.Client(
++                timeout=60.0,
++                limits=httpx.Limits(max_keepalive_connections=4, keepalive_expiry=60),
++            )
++        return _EL_HTTP_CLIENT
+ 
+ 
+ def _read_shared_voice_cfg() -> dict:
+@@ -126,7 +142,7 @@
+     if not key or not vid or not text.strip():
+         return None
+     try:
+-        r = httpx.post(
++        r = _elevenlabs_client().post(
+             f"https://api.elevenlabs.io/v1/text-to-speech/{vid}",
+             params={"output_format": "pcm_16000"},
+             headers={"xi-api-key": key, "Content-Type": "application/json"},
+@@ -1389,7 +1405,8 @@
+                     self._ready_announced = True
+                     self._broadcast_listening_ready(True)
+                 await self.handler.receive((input_sample_rate, audio_frame))
+-            await asyncio.sleep(0)  # avoid busy loop
++            # Yield briefly when the recorder is empty instead of spinning a CPU.
++            await asyncio.sleep(0.005 if audio_frame is None else 0)
+ 
+     @staticmethod
+     def _frame_rms(audio_frame: Any) -> float:
+--- a/reachy_mini_assistant/src/reachy_mini_assistant/assistant.py
++++ b/reachy_mini_assistant/src/reachy_mini_assistant/assistant.py
+@@ -135,6 +135,7 @@
+     mic_task = None
+     synth_task = None
+     speech_task = None
++    watchdog_task = None
+     text_q: asyncio.Queue = asyncio.Queue()   # texto -> sintetizador
+     audio_q: asyncio.Queue = asyncio.Queue()  # audio listo -> parlante
+     try:
+@@ -325,10 +326,17 @@
+     last_local_speech = 0.0
+     while not stop_event.is_set() and not assistant.stop_requested:
+         now = time.monotonic()
++        # Always consume the recorder, including during speech/cooldown. Otherwise
++        # queued speaker echo and stale user audio become the next conversation.
++        try:
++            frame = robot.media.get_audio_sample()
++        except Exception:
++            frame = None
++        has_audio = frame is not None and getattr(frame, "size", 0) > 0
+         # Mientras el asistente habla (o tiene fragmentos en cola) no se envía audio.
+         if assistant.state == "speaking" or assistant.stream_active:
+             speaking_prev = True
+-            await asyncio.sleep(0.05)
++            await asyncio.sleep(0 if has_audio else 0.005)
+             continue
+         if speaking_prev:
+             speaking_prev = False
+@@ -336,13 +344,9 @@
+         # Cooldown tras hablar: con bafle externo el eco tarda en morir;
+         # esperar más evita que Reachy se escuche a sí mismo y se interrumpa.
+         if now - last_speaking_end < 2.5:
+-            await asyncio.sleep(0.05)
++            await asyncio.sleep(0 if has_audio else 0.005)
+             continue
+-        try:
+-            frame = robot.media.get_audio_sample()
+-        except Exception:
+-            frame = None
+-        if frame is not None and getattr(frame, "size", 0) > 0:
++        if has_audio:
+             a = to_float32(frame)
+             rms = _rms(a)
+             # Detección local: "Escuchando" cuando hay voz, y "En espera" si hay silencio.
+@@ -353,7 +357,7 @@
+                 assistant.set_state("idle")
+             pcm = (np.clip(a, -1, 1) * 32767).astype(np.int16)
+             await engine.send_audio(pcm.tobytes())
+-        await asyncio.sleep(0.02)
++        await asyncio.sleep(0 if has_audio else 0.005)
+ 
+ 
+ def _segment_seconds(buf: list[np.ndarray], rate: int) -> float:
+@@ -385,12 +389,12 @@
+         text = str(body.get("text") or "").strip()
+         if not text:
+             text = assistant.cfg.greeting
+-        assistant.speak(robot, text)
++        await asyncio.to_thread(assistant.speak, robot, text)
+         return JSONResponse({"ok": True, "text": text})
+ 
+     @settings_app.post("/greet")
+     async def greet() -> JSONResponse:
+-        assistant.speak(robot, assistant.cfg.greeting)
++        await asyncio.to_thread(assistant.speak, robot, assistant.cfg.greeting)
+         return JSONResponse({"ok": True, "text": assistant.cfg.greeting})
+ 
+     @settings_app.post("/settings")
+@@ -409,4 +413,4 @@
+             if key in allowed and value is not None:
+                 setattr(assistant.cfg, key, value)
+         config_mod.save_config(assistant.cfg)
+-        return JSONResponse({"ok": True, "config": config_mod.to_dict(assistant.cfg)})+        return JSONResponse({"ok": True, "config": config_mod.to_dict(assistant.cfg)})
+--- a/reachy_mini_assistant/src/reachy_mini_assistant/realtime_engine.py
++++ b/reachy_mini_assistant/src/reachy_mini_assistant/realtime_engine.py
+@@ -201,6 +201,8 @@
+             logger.warning("Motor del Hub terminó: %s", e)
+         finally:
+             self.conn = None
++            self.connected.clear()
++            await client.close()
+ 
+     @staticmethod
+     async def _maybe_await(value: Any) -> None:
+@@ -332,4 +334,4 @@
+                 audio=base64.b64encode(pcm_int16).decode("ascii")
+             )
+         except Exception as e:  # noqa: BLE001
+-            logger.debug("Enviando audio: %s", e)+            logger.debug("Enviando audio: %s", e)

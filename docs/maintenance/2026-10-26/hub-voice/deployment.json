@@ -1,0 +1,26 @@
+{
+  "backup": "/home/pollen/hub-voice-backups/20261026-134054",
+  "files": {
+    "console.py": {
+      "before": "bd0f301ce1427aefb779fbc1ea7a3bd7dcca14c9bceb9b2b4fb0a2703998ae1f",
+      "after": "da3a41d2360310b1e332eb80216d3c2ca841a67a71b5658930dfd4a11afa4ab9"
+    },
+    "huggingface_realtime.py": {
+      "before": "cd1615e8ad722cdf50b1ac426ea21e4d434eef3f86a976c4b4c99087a00c5664",
+      "after": "67467ba83bfd0ba8048f8dc2ea11725d24a981685d4bb05f9cda04f121d12a9b"
+    },
+    "elevenlabs_stream.py": {
+      "before": null,
+      "after": "3c738584a9766ad08e7b7b347a9712a53d49df45f9086a6985587f15206c722e"
+    },
+    "static/js/api.js": {
+      "before": "757027508df49076439f2d4e27bb0246d77388ae657b5b65f63f9087be7390f3",
+      "after": "fb512e9c8654b74c0c8c0c2db6f07885adb0b8540142911e3d99ea2034bdc90a"
+    },
+    "static/js/views/talk.js": {
+      "before": "0563156546e32c7d7b2eeef27bf060aedb8eb5ed74345268dbb3037430770ae2",
+      "after": "1d2b36b1c102bcb3b7fa7c3f3b717fd8b7e18cbd0b8e57d737245f7e1cdeee86"
+    }
+  },
+  "status": "installed; Hub UI running"
+}

@@ -11,6 +11,7 @@ import {
   listPersonalities,
   newSession,
   setListening,
+  stopSpeech,
   subscribe,
 } from "../api.js";
 import { ORB_STATES } from "../constants.js";
@@ -40,6 +41,11 @@ export async function mountTalkView({ outlet, signal }) {
   let subscription = null;
   let readyToRespond = false;
   let lastTranscript = "";
+  let serverState = ORB_STATES.IDLE;
+  let pollPending = false;
+  let stateTimer = null;
+  let stopPending = false;
+  let actionVersion = 0;
 
   const caption = h(
     "p",
@@ -55,7 +61,7 @@ export async function mountTalkView({ outlet, signal }) {
   const orb = createOrb({
     initialState: ORB_STATES.CONNECTING,
     onStateChange: (state) => {
-      caption.textContent = CAPTION_BY_STATE[state] || "";
+      caption.textContent = listening && readyToRespond ? "Listo para responder — toca Responder" : CAPTION_BY_STATE[state] || "";
     },
     holdStates: [ORB_STATES.LISTENING],
   });
@@ -73,6 +79,12 @@ export async function mountTalkView({ outlet, signal }) {
     h("span", { class: "talk__ptt-label" }, "Hablar")
   );
   talkButton.addEventListener("click", onTalkTap);
+
+  const stopButton = h("button", {
+    type: "button", class: "talk__new-session talk__stop-button",
+    "aria-label": "Parar habla y cancelar la respuesta",
+  }, "■ Parar habla");
+  stopButton.addEventListener("click", onStopSpeech);
 
   const newSessionButton = h(
     "button",
@@ -92,7 +104,7 @@ export async function mountTalkView({ outlet, signal }) {
     h("div", { class: "talk__orb-wrap" }, orb.root),
     caption,
     transcriptLine,
-    h("div", { class: "talk__controls" }, talkButton),
+    h("div", { class: "talk__controls" }, talkButton, stopButton),
     h("div", { class: "talk__row" }, personalitySelect, newSessionButton)
   );
   outlet.replaceChildren(view);
@@ -117,7 +129,11 @@ export async function mountTalkView({ outlet, signal }) {
   }
 
   const listenState = await listenStatePromise;
-  if (listenState) listening = Boolean(listenState.listening);
+  if (listenState) {
+    listening = Boolean(listenState.listening);
+    readyToRespond = listening && Boolean(listenState.ready);
+    serverState = listenState.state === "ready" ? ORB_STATES.IDLE : listenState.state || ORB_STATES.IDLE;
+  }
   if (signal.aborted) return;
   orb.root.disabled = false;
   syncTalkAria();
@@ -126,14 +142,17 @@ export async function mountTalkView({ outlet, signal }) {
     onReady: async () => {
       if (!togglePending) {
         try {
-          listening = Boolean((await getListenState())?.listening);
+          const state = await getListenState();
+          listening = Boolean(state?.listening);
+          readyToRespond = listening && Boolean(state?.ready);
+          serverState = state?.state === "ready" ? ORB_STATES.IDLE : state?.state || ORB_STATES.IDLE;
         } catch {
           // keep the last known listening state
         }
       }
       if (signal.aborted) return;
       orb.setState(restingState());
-      caption.textContent = CAPTION_BY_STATE[restingState()];
+      caption.textContent = readyToRespond ? "Listo para responder — toca Responder" : CAPTION_BY_STATE[restingState()];
       syncTalkAria();
     },
     onNotice: (params) => {
@@ -162,10 +181,12 @@ export async function mountTalkView({ outlet, signal }) {
       orb.setState(next);
     },
     onTurn: (state) => {
+      serverState = state === "ready" ? ORB_STATES.IDLE : state;
       if (state === "listening_ready") {
+        if (!listening) return;
         readyToRespond = true;
         orb.setState(ORB_STATES.LISTENING);
-        caption.textContent = "✅ Listo — toca Responder";
+        caption.textContent = "Listo para responder — toca Responder";
         syncTalkAria();
         return;
       }
@@ -181,9 +202,49 @@ export async function mountTalkView({ outlet, signal }) {
       orb.setState(state);
     },
   });
+  // Recover readiness after a lost notification, reconnect, or page reload.
+  stateTimer = setInterval(refreshListenState, 1000);
+
+  async function refreshListenState() {
+    if (pollPending || togglePending || stopPending || signal.aborted) return;
+    pollPending = true;
+    const version = actionVersion;
+    try {
+      const state = await getListenState();
+      if (signal.aborted || togglePending || stopPending || version !== actionVersion) return;
+      listening = Boolean(state.listening);
+      readyToRespond = listening && Boolean(state.ready);
+      serverState = state.state === "ready" ? ORB_STATES.IDLE : state.state || ORB_STATES.IDLE;
+      orb.setState(restingState());
+      caption.textContent = readyToRespond ? "✓ Listo para responder — toca Responder" : CAPTION_BY_STATE[restingState()];
+      syncTalkAria();
+    } catch { /* retain current display during a brief disconnect */ }
+    finally { pollPending = false; }
+  }
+
+  async function onStopSpeech() {
+    if (stopPending) return;
+    stopPending = true;
+    actionVersion += 1;
+    stopButton.disabled = true;
+    try {
+      await stopSpeech();
+      if (signal.aborted) return;
+      listening = false;
+      readyToRespond = false;
+      serverState = ORB_STATES.IDLE;
+      orb.setState(ORB_STATES.IDLE);
+      caption.textContent = "Habla detenida. Puedes volver a hablar.";
+      syncTalkAria();
+    } catch (error) {
+      if (!signal.aborted) caption.textContent = `No se pudo detener: ${error?.message || error}`;
+    } finally { stopPending = false; stopButton.disabled = false; }
+  }
 
   function cleanup() {
     subscription?.close();
+    clearInterval(stateTimer);
+    stopButton.removeEventListener("click", onStopSpeech);
     orb.dispose();
     talkButton.removeEventListener("click", onTalkTap);
     newSessionButton.removeEventListener("click", onNewSession);
@@ -195,15 +256,19 @@ export async function mountTalkView({ outlet, signal }) {
   }
 
   function restingState() {
-    return listening ? ORB_STATES.LISTENING : ORB_STATES.IDLE;
+    return listening ? ORB_STATES.LISTENING :
+      (Object.values(ORB_STATES).includes(serverState) ? serverState : ORB_STATES.IDLE);
   }
 
   async function onTalkTap() {
-    if (togglePending) return;
+    if (togglePending || stopPending) return;
     togglePending = true;
+    actionVersion += 1;
+    talkButton.disabled = true;
     try {
       const data = await setListening(!listening);
       listening = Boolean(data?.listening);
+      serverState = data?.state === "ready" ? ORB_STATES.IDLE : data?.state || ORB_STATES.IDLE;
     } catch (error) {
       if (!signal.aborted) {
         caption.textContent = `No se pudo cambiar el estado: ${error?.message || error}`;
@@ -211,6 +276,7 @@ export async function mountTalkView({ outlet, signal }) {
       return;
     } finally {
       togglePending = false;
+      talkButton.disabled = false;
     }
     if (signal.aborted) return;
     if (listening) {

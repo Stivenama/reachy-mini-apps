@@ -1,0 +1,38 @@
+{
+  "backup": "/home/pollen/class-assistant-backups/20261026-140613",
+  "files": {
+    "portal/daemon.py": {
+      "before": "0a76e8908b7876501286ca717232ee98ccef258e3c683f915f86ce61224daf08",
+      "after": "e2621826340d2178d745076f91a499f7c9040b133bcddf925266a0d74d4afed4"
+    },
+    "reachy_mini_assistant/assistant.py": {
+      "before": "a74482697a70deffe6b6eedb5f26177bf28d1f333cd24597339cab9cbabf22f8",
+      "after": "17b9f2bb57f3074a2175fffe1d3d1556803065b6c9ce117361268721a7f6d256"
+    },
+    "reachy_mini_assistant/realtime_engine.py": {
+      "before": "24c35429068ddf092afe79656aba45e8adf0f014de6e14516a665ceac914f2e4",
+      "after": "4f27186811fdee4dfb772d23e993eda570c25580ca9c07c0e3d1f6ab03203ce1"
+    },
+    "reachy_mini_assistant/tts.py": {
+      "before": "79d5304004cee09841e985ee15ba9e8b8c2b3c16717a4861d6b7af2ff599012b",
+      "after": "09a1fd323a69820ea5c43381018ee1cbaeab2245c5c3a857e02fc3fb3cd41f62"
+    },
+    "reachy_mini_classroom/backend.py": {
+      "before": "46ce0baba00f791e0e3d47427c4b4b1e1e971696ed3f599a51f384924fc69106",
+      "after": "c5d5c5c793f4011136a564ad6d5cd45ad739e1c61dd11c44822cf5aff9e2cabc"
+    },
+    "reachy_mini_classroom/static/app.js": {
+      "before": "8852e7a41ab8a5c3d424f8a0e79b5c82200fe9df7b772f8550765f6c9c73720a",
+      "after": "b9e2f137b859c7ab62a673faa0e3aa9148810e25655e8dd914e93cf8cf28acd3"
+    },
+    "portal/static/app.js": {
+      "before": "39ed8411b647b82d46b63a480f9fb489838db4eb6a23ddabe95e6709019b55fe",
+      "after": "68d259d2d4f8f1a31139279c26dd9d4a6f3314c668183c825940f10f55c461da"
+    },
+    "portal/static/index.html": {
+      "before": "159fcee7cae3414e4bba1a4f22ca22afa6664c005cefed036821175cffe397d8",
+      "after": "1f3749769c9889c7e875633aae351d1b94383d2198a18b500a5221bc88f0924d"
+    }
+  },
+  "status": "installed; exact hashes verified; portal and classroom available"
+}

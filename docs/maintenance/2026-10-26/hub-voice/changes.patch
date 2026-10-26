@@ -1,0 +1,710 @@
+--- a/console.py
++++ b/console.py
+@@ -43,6 +43,7 @@
+ )
+ from reachy_mini_hub.prompts import get_session_voice, get_session_instructions
+ from reachy_mini_hub.streaming import AdditionalOutputs, audio_to_float32
++from reachy_mini_hub.elevenlabs_stream import SpeechTurn
+ from reachy_mini_hub.startup_settings import read_startup_settings, write_startup_settings
+ from reachy_mini_hub.tools.core_tools import initialize_tools
+ from reachy_mini_hub.tool_space_routes import register_tool_space_methods
+@@ -319,11 +320,16 @@
+         # Dedupe de la voz ElevenLabs (evita reproducir dos veces el mismo texto).
+         self._last_el_text: Optional[str] = None
+         self._last_el_ts: float = 0.0
++        self._el_turn = None
++        self._speech_epoch = 0
++        self._last_transcript = ""
++        self._last_transcript_at = None
+         self._install_handler(handler)
+ 
+     def _install_handler(self, handler: ConversationHandler) -> None:
+         """Set the active handler and wire LocalStream-owned helpers into it."""
+         self.handler = handler
++        handler._speech_observer = self._on_speech_event
+         self.handler._clear_queue = self.clear_audio_queue
+         self.handler.push_to_talk_holding = self._listening
+         self._attach_observers_to_handler()
+@@ -350,49 +356,85 @@
+                 "conversation.transcript",
+                 {"role": role, "text": text, "final": final},
+             )
+-        # Con ElevenLabs activo, sintetizamos y reproducimos aqui (el backend
+-        # emite la transcripcion final del asistente en response.output_audio_transcript.done).
+-        if final and role == "assistant" and text and _elevenlabs_active():
+-            import threading
+-
+-            threading.Thread(target=self._speak_elevenlabs, args=(text,), daemon=True).start()
++        if role == "user" and self._listening and text.strip() and text != self._last_transcript:
++            self._last_transcript = text
++            self._last_transcript_at = time.monotonic()
++            self._heard_speech = True
++            if self._ready_announced:
++                self._ready_announced = False
++                self._broadcast_listening_ready(False)
+ 
+     def _dispatch_text(self, text: str) -> None:
+-        """Push a conversation.text notification (final assistant text) to JSON-RPC clients."""
+         if self._rpc is not None and text:
+             self._rpc.broadcast_threadsafe("conversation.text", {"text": text})
+-        if text and _elevenlabs_active():
+-            import threading
+-
+-            threading.Thread(target=self._speak_elevenlabs, args=(text,), daemon=True).start()
+-
+-    def _speak_elevenlabs(self, text: str) -> None:
+-        """Sintetiza el texto del asistente con ElevenLabs y lo reproduce en Reachy."""
+-        # Evitar reproducir dos veces el mismo texto (transcript + text observer).
+-        now = time.time()
+-        if text == self._last_el_text and now - self._last_el_ts < 6:
+-            return
+-        self._last_el_text = text
+-        self._last_el_ts = now
+-        pcm = _elevenlabs_synthesize(text)
+-        if pcm is None or pcm.size == 0:
+-            return
+-        logger.info("ElevenLabs: reproduciendo %d muestras", int(pcm.size))
+-        try:
+-            frame = audio_to_float32(pcm)
+-            if frame.size == 0:
+-                return
+-            chunk = 1600  # ~100 ms a 16 kHz
+-            for i in range(0, frame.size, chunk):
+-                if self._stop_event.is_set():
+-                    break
+-                self._robot.media.push_audio_sample(frame[i : i + chunk])
+-                time.sleep(0.08)
+-            self._emit_level("assistant", frame)
+-            if self._audio_mode in ("pc", "both"):
+-                self._broadcast_audio(pcm)
+-        except Exception as e:  # noqa: BLE001
+-            logger.error("ElevenLabs playback failed: %s", e)
++
++    def _cancel_external_speech(self) -> None:
++        self._speech_epoch += 1
++        turn, self._el_turn = self._el_turn, None
++        if turn is not None:
++            turn.cancel()
++
++    def _on_speech_event(self, kind, channel="text", text="") -> None:
++        if kind == "start":
++            # Tool continuations may start before previous PCM has finished.
++            # Keep one ordered pipeline until all text and audio have drained.
++            if self._el_turn is not None and not self._el_turn.done.is_set():
++                if not self._el_turn.ended:
++                    from reachy_mini_hub.elevenlabs_stream import TextChunks
++                    self._el_turn.chunks = TextChunks()
++                    return
++            self._cancel_external_speech()
++            if not _elevenlabs_active(): return
++            cfg = _read_shared_voice_cfg()
++            if not cfg.get("elevenlabs_api_key") or not cfg.get("elevenlabs_voice_id"): return
++            epoch = self._speech_epoch
++            def state(value):
++                if epoch != self._speech_epoch or self._stop_event.is_set(): return
++                self.handler.deps.movement_manager.set_speaking(value == "speaking")
++                self._broadcast_turn(value, "elevenlabs")
++            def play(pcm):
++                if epoch != self._speech_epoch or self._stop_event.is_set(): return
++                data = np.frombuffer(pcm, dtype='<i2')
++                frame = audio_to_float32(data)
++                if self._audio_mode in ("robot", "both"):
++                    self._robot.media.push_audio_sample(frame)
++                if self._audio_mode in ("pc", "both"): self._broadcast_audio(data)
++                self._emit_level("assistant", frame)
++            def error(message):
++                if epoch == self._speech_epoch:
++                    self._broadcast_notice("voice_error", message)
++            self._el_turn = SpeechTurn(_elevenlabs_client(), cfg, play, state, error)
++        elif self._el_turn is not None:
++            if kind == "done": self._el_turn.finish()
++            else: self._el_turn.feed(channel, text, final=kind == "final")
++
++    def _update_listening_ready(self) -> None:
++        if not self._listening: return
++        now = time.monotonic()
++        # Stable recognised text is usable even with a fan/background above the
++        # fixed microphone RMS threshold. Empty recorder polls still run this.
++        stable = self._last_transcript_at is not None and now-self._last_transcript_at >= 1.2
++        quiet = self._last_speech_at is not None and now-self._last_speech_at >= READY_SILENCE_S
++        done = getattr(self.handler, '_response_done_event', None)
++        ready = bool(self._backend_connected() and (done is None or done.is_set())
++                     and self._heard_speech and self._streamed_samples >= MIN_HOLD_SAMPLES and (stable or quiet))
++        if ready != self._ready_announced:
++            self._ready_announced = ready
++            self._broadcast_listening_ready(ready)
++
++    async def stop_speech(self):
++        # Set the output gate before any await; late deltas cannot refill audio.
++        self.handler._output_stopped = True
++        self.clear_audio_queue()
++        self._listening = False
++        self._ready_announced = False
++        self.handler.push_to_talk_holding = False
++        self.handler.deps.movement_manager.set_listening(False)
++        self.handler.deps.movement_manager.set_speaking(False)
++        self._broadcast_turn("ready", "speech_stopped")
++        cancel = getattr(self.handler, 'cancel_response', None)
++        if cancel is not None: await cancel()
++        return {"ok": True, "listening": False, "state": "ready"}
+ 
+     # Audio level meter for the client orb. RMS is scaled into a visible 0..1
+     # range and capped to ~15 Hz so it stays light on the DataChannel.
+@@ -453,6 +495,10 @@
+             if self._ready_announced:
+                 self._ready_announced = False
+                 self._broadcast_listening_ready(False)
++        if getattr(self.handler, '_output_stopped', False) and not self._listening:
++            return
++        if _elevenlabs_active() and reason in ('assistant_audio_delta', 'assistant_transcript_done', 'response.done'):
++            return  # external player owns the visible speaking/completion state
+         if self._rpc is not None:
+             # While the talk button is held the orb must stay on "listening":
+             # any activity arriving now belongs to a previous turn still being
+@@ -498,6 +544,9 @@
+         except Exception as e:
+             logger.debug("Failed to sync listening state to movement manager: %s", e)
+         if self._listening:
++            self.clear_audio_queue()
++            self._last_transcript = ""
++            self._last_transcript_at = None
+             self._streamed_samples = 0
+             self._heard_speech = False
+             self._ready_announced = False
+@@ -1039,6 +1088,10 @@
+             rpc.broadcast_threadsafe("conversation.turn", {"state": "listening", "reason": "interrupted"})
+             return {"ok": True}
+ 
++        @rpc.method("conversation.stop")
++        async def _rpc_stop(_params: dict[str, object]) -> dict[str, object]:
++            return await self.stop_speech()
++
+         @rpc.method("conversation.mic")  # type: ignore[untyped-decorator]
+         def _rpc_mic(params: dict[str, object]) -> dict[str, object]:
+             # Legacy mute API kept for older clients. Muting commits the
+@@ -1065,6 +1118,7 @@
+                     self._mic_muted = False
+                     self._stop_listening_and_commit()
+                 logger.info("Listening=%s via /rpc", self._listening)
++            self._update_listening_ready()
+             return {"listening": self._listening, "ready": self._listening and self._ready_announced,
+                     "state": self._last_turn_state}
+ 
+@@ -1316,6 +1370,7 @@
+         - Cancels all pending async tasks (openai-handler, record-loop, play-loop)
+         """
+         logger.info("Stopping LocalStream...")
++        self._cancel_external_speech()
+ 
+         if self._timeline is not None:
+             self._timeline.stop()
+@@ -1351,6 +1406,7 @@
+         deprecated ``clear_output_buffer()`` only for older SDKs.
+         """
+         logger.info("User intervention: flushing player queue")
++        self._cancel_external_speech()
+         audio = getattr(self._robot.media, "audio", None)
+         if audio is not None:
+             if hasattr(audio, "clear_player") and callable(audio.clear_player):
+@@ -1393,18 +1449,8 @@
+                 if rms > SPEECH_RMS_THRESHOLD:
+                     self._heard_speech = True
+                     self._last_speech_at = time.monotonic()
+-                    if self._ready_announced:
+-                        self._ready_announced = False
+-                        self._broadcast_listening_ready(False)
+-                elif (
+-                    self._heard_speech
+-                    and not self._ready_announced
+-                    and self._last_speech_at is not None
+-                    and time.monotonic() - self._last_speech_at > READY_SILENCE_S
+-                ):
+-                    self._ready_announced = True
+-                    self._broadcast_listening_ready(True)
+                 await self.handler.receive((input_sample_rate, audio_frame))
++            self._update_listening_ready()
+             # Yield briefly when the recorder is empty instead of spinning a CPU.
+             await asyncio.sleep(0.005 if audio_frame is None else 0)
+ 
+@@ -1441,7 +1487,7 @@
+             elif isinstance(handler_output, tuple):
+                 # Never play assistant audio while the talk button is held;
+                 # the handler also drops it, this is the playback backstop.
+-                if self._listening:
++                if self._listening or getattr(self.handler, "_output_stopped", False):
+                     continue
+                 _, audio_data = handler_output
+ 
+--- a/huggingface_realtime.py
++++ b/huggingface_realtime.py
+@@ -221,6 +221,10 @@
+         # (e.g. gpt-5.6-terra with reasoning_effort). Once detected, tools are
+         # disabled for the session so the conversation keeps working.
+         self._tools_disabled = False
++        self._output_stopped = False
++        self._cancelled_response_ids = set()
++        self._active_response_id = None
++        self._response_epoch = 0
+ 
+     @staticmethod
+     def _sanitize_tool_result_for_model(tool_name: str, tool_result: dict[str, Any]) -> dict[str, Any]:
+@@ -492,7 +496,8 @@
+ 
+         This method never blocks the caller.
+         """
+-        await self._pending_responses.put(kwargs)
++        if not self._output_stopped:
++            await self._pending_responses.put(kwargs)
+ 
+     async def say(self, text: str) -> None:
+         """Inject ``text`` as a turn and have the model voice it now.
+@@ -506,6 +511,7 @@
+             raise ValueError("say: empty text")
+         if not self.connection:
+             raise RuntimeError("say: no active session")
++        self._output_stopped = False
+         await self.connection.conversation.item.create(
+             item={
+                 "type": "message",
+@@ -562,6 +568,7 @@
+         while self.connection:
+             try:
+                 kwargs = await self._pending_responses.get()
++                epoch = self._response_epoch
+             except asyncio.CancelledError:
+                 return
+ 
+@@ -585,7 +592,7 @@
+                     logger.debug("Timed out waiting for previous response to finish; forcing ahead")
+                     self._response_done_event.set()
+ 
+-                if not self.connection:
++                if not self.connection or self._output_stopped or epoch != self._response_epoch:
+                     break
+ 
+                 self._last_response_rejected = False
+@@ -811,6 +818,17 @@
+ 
+                 async for event in self.connection:
+                     logger.debug("Realtime event: %s", event.type)
++                    if event.type.startswith('response.output_') and self._suppressed_response_holds(event):
++                        continue
++                    if event.type == 'response.function_call_arguments.done' and self._output_stopped:
++                        continue
++                    observer = getattr(self, '_speech_observer', None)
++                    if observer and event.type in ('response.output_text.delta', 'response.output_audio_transcript.delta'):
++                        channel = 'text' if event.type == 'response.output_text.delta' else 'audio'
++                        observer('delta', channel, getattr(event, 'delta', '') or '')
++                    if observer and event.type in ('response.output_text.done', 'response.output_audio_transcript.done'):
++                        channel = 'text' if event.type == 'response.output_text.done' else 'audio'
++                        observer('final', channel, getattr(event, 'text', '') or getattr(event, 'transcript', '') or '')
+                     if event.type == "input_audio_buffer.speech_started":
+                         self._mark_activity("user_speech_started")
+                         self._turn_user_done_at = None
+@@ -839,6 +857,11 @@
+                             self._emit_text(event.text)
+ 
+                     if event.type == "response.created":
++                        self._active_response_id = getattr(event.response, 'id', None)
++                        if self._output_stopped:
++                            if self._active_response_id: self._cancelled_response_ids.add(self._active_response_id)
++                            await self.connection.response.cancel()
++                            continue
+                         if push_to_talk_enabled() and self.push_to_talk_holding:
+                             # A pause triggered server VAD while the user still
+                             # holds the talk button. Mark this response as
+@@ -858,6 +881,7 @@
+                             if self._clear_queue:
+                                 self._clear_queue()
+                             continue
++                        if observer: observer("start")
+                         self._mark_activity("response_created")
+                         self.deps.movement_manager.set_speaking(True)
+                         self._response_done_event.clear()
+@@ -869,6 +893,8 @@
+                         logger.debug("Response created (active)")
+ 
+                     if event.type == "response.done":
++                        if observer and not self._suppressed_response_holds(event) and not self._in_flight_tool_calls:
++                            observer('done')
+                         # Doesn't mean the audio is done playing
+                         # Resume tracking for responses that emit no audio (text-only / tool-only).
+                         self.deps.movement_manager.set_speaking(False)
+@@ -1073,6 +1099,9 @@
+     # Microphone receive
+     def _suppressed_response_holds(self, event: Any) -> bool:
+         """Return whether an output event belongs to a suppressed push-to-talk response."""
++        event_id = getattr(event, 'response_id', None) or getattr(getattr(event, 'response', None), 'id', None)
++        if self._output_stopped or event_id in self._cancelled_response_ids:
++            return True
+         if not push_to_talk_enabled():
+             return False
+         if self.push_to_talk_holding:
+@@ -1083,6 +1112,19 @@
+                 return True
+         return False
+ 
++    async def cancel_response(self) -> None:
++        self._output_stopped = True
++        self._response_epoch += 1
++        if self._active_response_id:
++            self._cancelled_response_ids.add(self._active_response_id)
++        while not self._pending_responses.empty():
++            try: self._pending_responses.get_nowait()
++            except asyncio.QueueEmpty: break
++        if self.connection and not self._response_done_event.is_set():
++            try: await asyncio.wait_for(self.connection.response.cancel(), timeout=2)
++            except Exception: logger.debug('Response cancellation could not be confirmed')
++        self.deps.movement_manager.set_speaking(False)
++
+     async def commit_input(self) -> None:
+         """Commit the buffered input audio, clearing the server input buffer."""
+         if not self.connection:
+@@ -1102,6 +1144,7 @@
+         """
+         if not self.connection:
+             return
++        self._output_stopped = False
+         if frames:
+             for frame in frames:
+                 await self.receive(frame)
+@@ -1141,6 +1184,8 @@
+         """
+         if not self.connection:
+             return "no_session"
++        self._output_stopped = False
++        epoch = self._response_epoch
+         voice = self.get_current_voice()
+         try:
+             speech = await self.client.audio.speech.create(
+@@ -1150,9 +1195,13 @@
+                 response_format="wav",
+             )
+         except Exception as error:
++            if self._output_stopped or epoch != self._response_epoch:
++                return "cancelled"
+             logger.warning("TTS endpoint unavailable (%s); falling back to verbatim say()", error)
+             await self._say_verbatim(text)
+             return "say_fallback"
++        if self._output_stopped or epoch != self._response_epoch:
++            return "cancelled"
+         rate, pcm = _wav_to_pcm16(speech.content)
+         if pcm is None or pcm.size == 0:
+             logger.warning("Empty TTS audio; falling back to verbatim say()")
+--- /dev/null
++++ b/elevenlabs_stream.py
+@@ -0,0 +1,156 @@
++"""Ordered, cancellable text/PCM streaming. No robot or credential side effects."""
++import logging
++import queue
++import threading
++import time
++
++log = logging.getLogger(__name__)
++
++
++class TextChunks:
++    def __init__(self):
++        self.channel = None
++        self.buffer = ''
++        self.emitted = False
++        self.finished = False
++        self.received = False
++
++    def feed(self, channel, text, final=False):
++        if not text and not final:
++            return []
++        if self.finished or (self.channel is not None and self.channel != channel):
++            return []
++        self.channel = channel
++        if final:
++            if not self.received:
++                self.buffer = text or ''
++            self.finished = True
++        else:
++            self.received = True
++            self.buffer += text or ''
++        chunks = []
++        while self.buffer.strip():
++            budget = 140 if self.emitted else 60
++            cut = next((i+1 for i,c in enumerate(self.buffer[:budget])
++                        if c in '.!?;:' and i >= 20), 0)
++            if not cut and len(self.buffer) >= budget:
++                cut = self.buffer.rfind(' ', 0, budget)
++                if cut < 1: cut = budget
++            if not cut and self.finished: cut = len(self.buffer)
++            if not cut: break
++            piece, self.buffer = self.buffer[:cut], self.buffer[cut:]
++            if piece.strip(): chunks.append(piece.strip()); self.emitted = True
++        return chunks
++
++
++class SpeechTurn:
++    """One synthesis producer + one paced player; cancellation gates every write."""
++    def __init__(self, client, config, play, on_state, on_error):
++        self.client, self.config = client, dict(config)
++        self.play, self.on_state, self.on_error = play, on_state, on_error
++        self.cancelled = threading.Event()
++        self.lock = threading.RLock()
++        self.text = queue.Queue(maxsize=256)
++        self.audio = queue.Queue(maxsize=40)  # two seconds of 50 ms PCM
++        self.chunks = TextChunks()
++        self.started = time.monotonic()
++        self.response = None
++        self.ended = False
++        self.char_count = 0
++        self.done = threading.Event()
++        self.producer = threading.Thread(target=self._synthesize, daemon=True)
++        self.player = threading.Thread(target=self._play, daemon=True)
++        self.producer.start(); self.player.start()
++
++    def feed(self, channel, text, final=False):
++        if self.cancelled.is_set() or self.ended: return
++        for piece in self.chunks.feed(channel, text, final):
++            self.char_count += len(piece)
++            if self.char_count > 40000:
++                self.cancel(); self.on_error('La respuesta de voz excedió el límite de longitud.'); return
++            try: self.text.put_nowait(piece)
++            except queue.Full:
++                self.cancel(); self.on_error('La cola de voz está llena. Vuelve a intentarlo.'); return
++
++    def finish(self):
++        if self.ended or self.cancelled.is_set(): return
++        self.feed(self.chunks.channel or 'text', '', True)
++        self.ended = True
++        try: self.text.put_nowait(None)
++        except queue.Full:
++            self.cancel(); self.on_error('La cola de voz está llena.')
++
++    def cancel(self):
++        with self.lock:
++            self.cancelled.set()
++        # Closing a stalled HTTP response must never block the control button.
++        response = self.response
++        if response is not None:
++            def close():
++                try: response.close()
++                except Exception: pass
++            threading.Thread(target=close, daemon=True).start()
++
++    def _put_audio(self, data):
++        while not self.cancelled.is_set():
++            try: self.audio.put(data, timeout=.05); return
++            except queue.Full: pass
++
++    def _synthesize(self):
++        previous = ''
++        try:
++            while not self.cancelled.is_set():
++                try: text = self.text.get(timeout=.1)
++                except queue.Empty: continue
++                if text is None: break
++                cfg = self.config
++                body = {'text': text, 'model_id': cfg.get('elevenlabs_model') or 'eleven_flash_v2_5'}
++                if previous: body['previous_text'] = previous[-1000:]
++                with self.client.stream('POST',
++                        f"https://api.elevenlabs.io/v1/text-to-speech/{cfg['elevenlabs_voice_id']}/stream",
++                        params={'output_format': 'pcm_16000'},
++                        headers={'xi-api-key': cfg['elevenlabs_api_key']}, json=body,
++                        timeout=30) as response:
++                    self.response = response
++                    response.raise_for_status()
++                    pending = b''
++                    for chunk in response.iter_bytes(chunk_size=1600):
++                        if self.cancelled.is_set(): return
++                        pending += chunk
++                        count = len(pending) // 2 * 2
++                        if count: self._put_audio(pending[:count]); pending = pending[count:]
++                    if pending: raise ValueError('PCM incompleto del proveedor de voz')
++                self.response = None
++                previous += ' ' + text
++        except Exception as exc:
++            if not self.cancelled.is_set():
++                log.warning('ElevenLabs streaming failed (%s)', type(exc).__name__)
++                self.on_error('No se pudo completar la voz de ElevenLabs. Comprueba la conexión o la configuración de voz.')
++        finally:
++            self.response = None
++            self._put_audio(None)
++
++    def _play(self):
++        deadline = time.monotonic()
++        first = True
++        try:
++            while not self.cancelled.is_set():
++                try: pcm = self.audio.get(timeout=.1)
++                except queue.Empty: continue
++                if pcm is None:
++                    self.cancelled.wait(max(0, deadline-time.monotonic())+.1)
++                    break
++                if self.cancelled.wait(max(0, deadline-time.monotonic()-.15)): break
++                with self.lock:
++                    if self.cancelled.is_set(): break
++                    if first:
++                        log.info('ElevenLabs first playback %.0f ms after response.created', (time.monotonic()-self.started)*1000)
++                        self.on_state('speaking'); first = False
++                    self.play(pcm)
++                deadline = max(deadline, time.monotonic()) + len(pcm)/32000
++        except Exception:
++            self.cancel()
++            self.on_error('No se pudo reproducir la voz.')
++        finally:
++            self.done.set()
++            if not self.cancelled.is_set(): self.on_state('ready')
+--- a/static/js/api.js
++++ b/static/js/api.js
+@@ -139,6 +139,7 @@
+ 
+ export const getListenState = () => rpcCall("conversation.listen", {});
+ export const setListening = (listening) => rpcCall("conversation.listen", { listening });
++export const stopSpeech = () => rpcCall("conversation.stop", {});
+ 
+ export const newSession = () => rpcCall("conversation.new_session", {});
+ export const readText = (text) => rpcCall("conversation.read", { text });
+--- a/static/js/views/talk.js
++++ b/static/js/views/talk.js
+@@ -11,6 +11,7 @@
+   listPersonalities,
+   newSession,
+   setListening,
++  stopSpeech,
+   subscribe,
+ } from "../api.js";
+ import { ORB_STATES } from "../constants.js";
+@@ -40,6 +41,11 @@
+   let subscription = null;
+   let readyToRespond = false;
+   let lastTranscript = "";
++  let serverState = ORB_STATES.IDLE;
++  let pollPending = false;
++  let stateTimer = null;
++  let stopPending = false;
++  let actionVersion = 0;
+ 
+   const caption = h(
+     "p",
+@@ -74,6 +80,12 @@
+   );
+   talkButton.addEventListener("click", onTalkTap);
+ 
++  const stopButton = h("button", {
++    type: "button", class: "talk__new-session talk__stop-button",
++    "aria-label": "Parar habla y cancelar la respuesta",
++  }, "■ Parar habla");
++  stopButton.addEventListener("click", onStopSpeech);
++
+   const newSessionButton = h(
+     "button",
+     { type: "button", class: "talk__new-session" },
+@@ -92,7 +104,7 @@
+     h("div", { class: "talk__orb-wrap" }, orb.root),
+     caption,
+     transcriptLine,
+-    h("div", { class: "talk__controls" }, talkButton),
++    h("div", { class: "talk__controls" }, talkButton, stopButton),
+     h("div", { class: "talk__row" }, personalitySelect, newSessionButton)
+   );
+   outlet.replaceChildren(view);
+@@ -120,6 +132,7 @@
+   if (listenState) {
+     listening = Boolean(listenState.listening);
+     readyToRespond = listening && Boolean(listenState.ready);
++    serverState = listenState.state === "ready" ? ORB_STATES.IDLE : listenState.state || ORB_STATES.IDLE;
+   }
+   if (signal.aborted) return;
+   orb.root.disabled = false;
+@@ -132,6 +145,7 @@
+           const state = await getListenState();
+           listening = Boolean(state?.listening);
+           readyToRespond = listening && Boolean(state?.ready);
++          serverState = state?.state === "ready" ? ORB_STATES.IDLE : state?.state || ORB_STATES.IDLE;
+         } catch {
+           // keep the last known listening state
+         }
+@@ -167,6 +181,7 @@
+       orb.setState(next);
+     },
+     onTurn: (state) => {
++      serverState = state === "ready" ? ORB_STATES.IDLE : state;
+       if (state === "listening_ready") {
+         if (!listening) return;
+         readyToRespond = true;
+@@ -187,9 +202,49 @@
+       orb.setState(state);
+     },
+   });
++  // Recover readiness after a lost notification, reconnect, or page reload.
++  stateTimer = setInterval(refreshListenState, 1000);
++
++  async function refreshListenState() {
++    if (pollPending || togglePending || stopPending || signal.aborted) return;
++    pollPending = true;
++    const version = actionVersion;
++    try {
++      const state = await getListenState();
++      if (signal.aborted || togglePending || stopPending || version !== actionVersion) return;
++      listening = Boolean(state.listening);
++      readyToRespond = listening && Boolean(state.ready);
++      serverState = state.state === "ready" ? ORB_STATES.IDLE : state.state || ORB_STATES.IDLE;
++      orb.setState(restingState());
++      caption.textContent = readyToRespond ? "✓ Listo para responder — toca Responder" : CAPTION_BY_STATE[restingState()];
++      syncTalkAria();
++    } catch { /* retain current display during a brief disconnect */ }
++    finally { pollPending = false; }
++  }
++
++  async function onStopSpeech() {
++    if (stopPending) return;
++    stopPending = true;
++    actionVersion += 1;
++    stopButton.disabled = true;
++    try {
++      await stopSpeech();
++      if (signal.aborted) return;
++      listening = false;
++      readyToRespond = false;
++      serverState = ORB_STATES.IDLE;
++      orb.setState(ORB_STATES.IDLE);
++      caption.textContent = "Habla detenida. Puedes volver a hablar.";
++      syncTalkAria();
++    } catch (error) {
++      if (!signal.aborted) caption.textContent = `No se pudo detener: ${error?.message || error}`;
++    } finally { stopPending = false; stopButton.disabled = false; }
++  }
+ 
+   function cleanup() {
+     subscription?.close();
++    clearInterval(stateTimer);
++    stopButton.removeEventListener("click", onStopSpeech);
+     orb.dispose();
+     talkButton.removeEventListener("click", onTalkTap);
+     newSessionButton.removeEventListener("click", onNewSession);
+@@ -201,15 +256,19 @@
+   }
+ 
+   function restingState() {
+-    return listening ? ORB_STATES.LISTENING : ORB_STATES.IDLE;
++    return listening ? ORB_STATES.LISTENING :
++      (Object.values(ORB_STATES).includes(serverState) ? serverState : ORB_STATES.IDLE);
+   }
+ 
+   async function onTalkTap() {
+-    if (togglePending) return;
++    if (togglePending || stopPending) return;
+     togglePending = true;
++    actionVersion += 1;
++    talkButton.disabled = true;
+     try {
+       const data = await setListening(!listening);
+       listening = Boolean(data?.listening);
++      serverState = data?.state === "ready" ? ORB_STATES.IDLE : data?.state || ORB_STATES.IDLE;
+     } catch (error) {
+       if (!signal.aborted) {
+         caption.textContent = `No se pudo cambiar el estado: ${error?.message || error}`;
+@@ -217,6 +276,7 @@
+       return;
+     } finally {
+       togglePending = false;
++      talkButton.disabled = false;
+     }
+     if (signal.aborted) return;
+     if (listening) {

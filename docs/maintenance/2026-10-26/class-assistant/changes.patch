@@ -1,0 +1,502 @@
+--- a/portal/daemon.py
++++ b/portal/daemon.py
+@@ -238,7 +238,7 @@
+     return JSONResponse({"ok": running, "state": final_state, "start": start})
+ 
+ 
+-PORTAL_VERSION = "21"
++PORTAL_VERSION = "22"
+ 
+ 
+ @app.get("/api/version")
+@@ -637,6 +637,11 @@
+     return False
+ 
+ 
++@app.post("/api/assistant/stop-speech")
++def assistant_stop_speech() -> JSONResponse:
++    return JSONResponse(_assistant("/stop-speech", "POST"))
++
++
+ @app.get("/api/assistant/state")
+ def assistant_state() -> JSONResponse:
+     return JSONResponse(_assistant("/state"))
+--- a/reachy_mini_assistant/assistant.py
++++ b/reachy_mini_assistant/assistant.py
+@@ -5,6 +5,7 @@
+ import asyncio
+ import logging
+ import time
++import threading
+ 
+ import numpy as np
+ from fastapi import Request
+@@ -49,6 +50,9 @@
+         self.state = "idle"
+         self.stream_active = False  # True mientras hay fragmentos en el pipeline de voz
+         self.stop_requested = False
++        self.speech_epoch = 0
++        self.audio_lock = threading.RLock()
++        self.cancel_pipeline = None
+         self.engine = None  # RealtimeEngine (se asigna al arrancar)
+ 
+     def set_state(self, state: str) -> None:
+@@ -58,22 +62,39 @@
+         except Exception:
+             pass
+ 
++    def stop_speech(self, robot):
++        with self.audio_lock:
++            self.speech_epoch += 1
++            if self.engine: self.engine.output_stopped = True
++            robot.media.stop_playing()
++            robot.media.start_playing()
++            self.stream_active = False
++            self.set_state('idle')
++        if self.cancel_pipeline: self.cancel_pipeline()
++
+     def speak(self, robot, text: str) -> None:
+-        text = (text or "").strip()
+-        if not text:
+-            return
+-        self.set_state("speaking")
+-        try:
+-            rate, audio = tts.synthesize(self.cfg, text)
+-            robot.media.push_audio_sample(audio)
+-            # Esperar a que termine de sonar de verdad: si no, el cambio de
+-            # app (que cierra este proceso) corta el mensaje a la mitad.
+-            if rate and audio is not None and audio.size:
+-                time.sleep(audio.size / float(rate) + 0.2)
+-        except Exception as e:  # noqa: BLE001
+-            logger.warning("TTS falló: %s", e)
++        text = (text or '').strip()
++        if not text: return
++        epoch = self.speech_epoch
++        async def play():
++            deadline=time.monotonic()
++            async for audio in tts.stream_audio(self.cfg,text):
++                if epoch != self.speech_epoch: return
++                await asyncio.sleep(max(0,deadline-time.monotonic()-.15))
++                with self.audio_lock:
++                    if epoch != self.speech_epoch: return
++                    self.set_state('speaking')
++                    robot.media.push_audio_sample(audio)
++                deadline=max(time.monotonic(),deadline)+len(audio)/16000
++            while epoch == self.speech_epoch and time.monotonic()<deadline+.15:
++                await asyncio.sleep(.02)
++        try:
++            self.set_state('speaking')
++            asyncio.run(play())
++        except Exception as e:
++            logger.warning('TTS falló: %s',type(e).__name__)
+         finally:
+-            self.set_state("idle")
++            if epoch == self.speech_epoch: self.set_state('idle')
+ 
+     def handle_text(self, robot, text: str) -> None:
+         if not text:
+@@ -137,7 +158,7 @@
+     speech_task = None
+     watchdog_task = None
+     text_q: asyncio.Queue = asyncio.Queue()   # texto -> sintetizador
+-    audio_q: asyncio.Queue = asyncio.Queue()  # audio listo -> parlante
++    audio_q: asyncio.Queue = asyncio.Queue(maxsize=20)  # audio listo -> parlante
+     try:
+         hardware_id = ""
+         try:
+@@ -153,14 +174,14 @@
+             # si no, el worker de reproducción espera para nunca y el estado
+             # queda atascado en "Hablando" (sordo + widget mintiendo).
+             if state == "idle":
+-                text_q.put_nowait(_TURN_END)
++                text_q.put_nowait((assistant.speech_epoch, _TURN_END))
+             if assistant.state == "speaking":
+                 return
+             assistant.set_state(state)
+ 
+         async def _chunk_producer(text: str) -> None:
+             assistant.stream_active = True
+-            await text_q.put(text)
++            await text_q.put((assistant.speech_epoch, text))
+ 
+         loop = asyncio.get_running_loop()
+ 
+@@ -171,45 +192,61 @@
+         def _notify(text: str) -> None:
+             """Narrar desde hilos de fondo (hilo-seguro)."""
+             try:
+-                loop.call_soon_threadsafe(text_q.put_nowait, text)
++                loop.call_soon_threadsafe(text_q.put_nowait, (assistant.speech_epoch, text))
+             except RuntimeError:
+                 pass
+ 
+         async def _synth_worker() -> None:
+-            """Sintetiza con ElevenLabs mientras otro chunk ya se está hablando."""
++            import httpx
++            async with httpx.AsyncClient(timeout=45) as client:
++                while True:
++                    item=await text_q.get()
++                    if item is None: return
++                    epoch,chunk=item
++                    if epoch != assistant.speech_epoch: continue
++                    if chunk == _TURN_END:
++                        await audio_q.put((epoch,_TURN_END)); continue
++                    try:
++                        async for audio in tts.stream_audio(cfg,chunk,client):
++                            if epoch != assistant.speech_epoch: break
++                            await audio_q.put((epoch,audio))
++                    except Exception as e:
++                        logger.warning('TTS de fragmento falló: %s',type(e).__name__)
++
++        async def _play_worker() -> None:
++            deadline=time.monotonic()
+             while True:
+-                chunk = await text_q.get()
+-                if chunk is None:
+-                    await audio_q.put(None)
+-                    return
+-                if chunk == _TURN_END:
+-                    await audio_q.put(_TURN_END)
++                epoch,audio=await audio_q.get()
++                if epoch != assistant.speech_epoch:
++                    deadline=time.monotonic(); continue
++                if isinstance(audio,str) and audio == _TURN_END:
++                    await asyncio.sleep(max(0,deadline-time.monotonic())+.1)
++                    if epoch == assistant.speech_epoch:
++                        assistant.stream_active=False
++                        assistant.set_state('idle')
+                     continue
+-                try:
+-                    _, audio = await asyncio.to_thread(tts.synthesize, cfg, chunk)
+-                    await audio_q.put(audio)
+-                except Exception as e:  # noqa: BLE001
+-                    logger.warning("TTS de fragmento falló: %s", e)
+-
+-        async def _play_worker() -> None:
+-            """Reproduce el audio en orden; al marcar fin de turno vuelve a idle."""
+-            while True:
+-                audio = await audio_q.get()
+-                if audio is None:
+-                    return
+-                if isinstance(audio, str) and audio == _TURN_END:
+-                    assistant.stream_active = False
+-                    assistant.set_state("idle")
+-                    continue
+-                assistant.set_state("speaking")
+-                try:
+-                    await asyncio.to_thread(robot.media.push_audio_sample, audio)
+-                except Exception as e:  # noqa: BLE001
+-                    logger.warning("Reproducción falló: %s", e)
+-                # Esperar la duración real del audio: evita que el estado
+-                # vuelva a idle antes de tiempo (y que el micro escuche el eco).
+-                await asyncio.sleep(audio.shape[0] / 16000.0 + 0.05)
+-            assistant.set_state("idle")
++                await asyncio.sleep(max(0,deadline-time.monotonic()-.15))
++                with assistant.audio_lock:
++                    if epoch != assistant.speech_epoch:
++                        deadline=time.monotonic(); continue
++                    assistant.set_state('speaking')
++                    robot.media.push_audio_sample(audio)
++                deadline=max(time.monotonic(),deadline)+len(audio)/16000
++
++        cancel_lock=asyncio.Lock()
++
++        async def _cancel_pipeline():
++            nonlocal synth_task
++            async with cancel_lock:
++                if synth_task:
++                    synth_task.cancel()
++                    await asyncio.gather(synth_task,return_exceptions=True)
++                for queue in (text_q,audio_q):
++                    while not queue.empty(): queue.get_nowait()
++                synth_task=asyncio.create_task(_synth_worker(),name='tts-worker')
++                if engine: await engine.cancel_response()
++
++        assistant.cancel_pipeline=lambda: asyncio.run_coroutine_threadsafe(_cancel_pipeline(),loop)
+ 
+         engine = RealtimeEngine(
+             session_url=cfg.hf_session_url,
+@@ -255,11 +292,8 @@
+         while not stop_event.is_set() and not assistant.stop_requested:
+             await asyncio.sleep(0.5)
+     finally:
+-        try:
+-            await text_q.put(None)
+-            await audio_q.put(None)
+-        except Exception:
+-            pass
++        assistant.cancel_pipeline = None
++        assistant.speech_epoch += 1
+         for task in (engine_task, mic_task, synth_task, speech_task, watchdog_task):
+             if task is not None:
+                 task.cancel()
+@@ -309,7 +343,7 @@
+                         text_q.get_nowait()
+                     while not audio_q.empty():
+                         audio_q.get_nowait()
+-                    audio_q.put_nowait(turn_end)
++                    audio_q.put_nowait((assistant.speech_epoch, turn_end))
+                 except Exception:
+                     pass
+                 assistant.stream_active = False
+@@ -374,11 +408,17 @@
+         return JSONResponse(
+             {
+                 "state": assistant.state,
++                "ready": bool(eng and eng.connected.is_set() and assistant.state == "idle" and not assistant.stream_active),
+                 "user_text": eng.user_text if eng else "",
+                 "assistant_text": eng.assistant_text if eng else "",
+                 "config": config_mod.to_dict(assistant.cfg),
+             }
+         )
++
++    @settings_app.post("/stop-speech")
++    async def stop_speech() -> JSONResponse:
++        await asyncio.to_thread(assistant.stop_speech, robot)
++        return JSONResponse({"ok": True})
+ 
+     @settings_app.post("/speak")
+     async def speak(request: Request) -> JSONResponse:
+--- a/reachy_mini_assistant/realtime_engine.py
++++ b/reachy_mini_assistant/realtime_engine.py
+@@ -48,7 +48,7 @@
+ 
+ def _take_chunk(buffer: str, min_len: int = 16, max_len: int = 140) -> tuple[str, str]:
+     """Toma un fragmento (termina en . ! ? , ; : ¡ ¿) para hablar por partes."""
+-    buffer = (buffer or "").strip()
++    buffer = (buffer or "").lstrip()
+     if len(buffer) < min_len:
+         return "", buffer
+     idx = -1
+@@ -56,12 +56,12 @@
+         if ch in ".!?,;:¡¿" and i + 1 >= min_len:
+             idx = i + 1
+     if idx >= min_len and idx <= max_len:
+-        return buffer[:idx].strip(), buffer[idx:].strip()
++        return buffer[:idx].strip(), buffer[idx:].lstrip()
+     if len(buffer) >= max_len:
+         cut = buffer.rfind(" ", 0, max_len)
+         if cut < min_len:
+             cut = max_len
+-        return buffer[:cut].strip(), buffer[cut:].strip()
++        return buffer[:cut].strip(), buffer[cut:].lstrip()
+     return "", buffer
+ 
+ 
+@@ -111,6 +111,9 @@
+         self.on_state = on_state
+         self.on_ack = on_ack          # async: aviso hablado inmediato (en el bucle)
+         self.on_notify = on_notify    # síncrono + hilo-seguro: narrar desde hilos bg
++        self.output_stopped = False
++        self.cancelled_responses = set()
++        self.active_response = None
+         self.conn = None
+         self.connected = asyncio.Event()
+         self._stream_text = ""
+@@ -218,6 +221,15 @@
+             self._seen_event_types.add(t)
+             logger.info("Evento realtime visto: %s", t)
+         try:
++            rid=getattr(event,'response_id',None)
++            if rid in self.cancelled_responses: return
++            if t == 'input_audio_buffer.speech_started': self.output_stopped=False
++            if t == 'response.created':
++                self.active_response=getattr(getattr(event,'response',None),'id',None)
++                if self.output_stopped:
++                    await self.cancel_response()
++                    return
++            if self.output_stopped and t.startswith('response.'): return
+             if t in ("response.output_text.delta", "response.output_audio_transcript.delta"):
+                 # Texto EN TIEMPO REAL del motor del Hub: hablar por partes.
+                 delta = getattr(event, "delta", "") or ""
+@@ -325,6 +337,18 @@
+             except Exception as e:  # noqa: BLE001
+                 logger.warning("No se pudo enviar resultado de tool %s: %s", name, e)
+ 
++    async def cancel_response(self):
++        self.output_stopped=True
++        self._stream_text=''
++        if self.active_response:
++            self.cancelled_responses.add(self.active_response)
++        if self.conn:
++            try:
++                await asyncio.wait_for(self.conn.response.cancel(),2)
++                await asyncio.wait_for(self.conn.input_audio_buffer.clear(),2)
++            except Exception:
++                pass
++
+     async def send_audio(self, pcm_int16: bytes) -> None:
+         conn = self.conn
+         if conn is None:
+--- a/reachy_mini_assistant/tts.py
++++ b/reachy_mini_assistant/tts.py
+@@ -5,6 +5,7 @@
+ 
+ from __future__ import annotations
+ 
++import asyncio
+ import io
+ import os
+ import struct
+@@ -247,4 +248,34 @@
+         resp = client.post(url, headers=headers, content=ssml.encode("utf-8"))
+         resp.raise_for_status()
+     audio = np.frombuffer(resp.content, dtype=np.int16).astype(np.float32) / 32768.0
+-    return 16000, audio+    return 16000, audio
++
++async def stream_audio(cfg, text, client=None):
++    """Yield 50 ms PCM packets; preserve other providers and robotic processing."""
++    if cfg.tts_provider != 'elevenlabs' or not cfg.elevenlabs_api_key or _robotic_enabled():
++        rate, audio = await asyncio.to_thread(synthesize, cfg, text)
++        audio = _resample(audio, rate, OUT_RATE)
++        for start in range(0, len(audio), 800):
++            yield audio[start:start+800]
++        return
++    if client is None:
++        async with httpx.AsyncClient(timeout=45) as owned:
++            async for audio in stream_audio(cfg, text, owned):
++                yield audio
++        return
++    voice = (cfg.elevenlabs_voice_id or '').strip() or 'TX3LPaxmHKxFdv7VOQHJ'
++    async with client.stream('POST',
++                f'https://api.elevenlabs.io/v1/text-to-speech/{voice}/stream',
++                params={'output_format':'pcm_16000'},
++                headers={'xi-api-key':cfg.elevenlabs_api_key},
++                json={'text':text,'model_id':cfg.elevenlabs_model or 'eleven_flash_v2_5',
++                      'voice_settings':_elevenlabs_voice_settings()}) as response:
++        response.raise_for_status()
++        pending=b''
++        async for packet in response.aiter_bytes(1600):
++            pending += packet
++            size=len(pending)//2*2
++            if size:
++                yield np.frombuffer(pending[:size],dtype='<i2').astype(np.float32)/32768
++                pending=pending[size:]
++        if pending: raise RuntimeError('Audio PCM incompleto')
+--- a/reachy_mini_classroom/backend.py
++++ b/reachy_mini_classroom/backend.py
+@@ -451,10 +451,17 @@
+         # Voz ElevenLabs configurada → sintetizar con EL en lugar del audio HF.
+         el = _load_elevenlabs_speech()
+         if el:
++            delivered = False
++            def deliver(pcm):
++                nonlocal delivered
++                delivered = True
++                on_audio(pcm)
+             try:
+-                await self._speak_elevenlabs(text, on_audio, el, report)
++                await self._speak_elevenlabs(text, deliver, el, report)
+                 return
+             except Exception as e:
++                if delivered:
++                    raise RuntimeError('La voz se interrumpió. El resumen está guardado y puedes volver a leerlo.') from e
+                 log.warning('CLASSROOM EL_SPEECH_FAILED error=%s; fallback HF', e)
+         # Also covers a summary saved before plain text was enforced.
+         parts=self._speech_parts(self.plain_text(text),self.speech_chars())
+@@ -481,12 +488,29 @@
+     async def _speak_elevenlabs(self, text, on_audio, el, report=None):
+         voice_id, api_key = el
+         parts = self._speech_parts(self.plain_text(text), self.speech_chars())
+-        for index, part in enumerate(parts):
+-            if report: report(f'Generando voz {index+1} de {len(parts)}')
+-            log.info('CLASSROOM EL_SPEECH_PART part=%d total=%d chars=%d',
+-                     index + 1, len(parts), len(part))
+-            pcm = await asyncio.to_thread(_elevenlabs_speech_bytes, voice_id, api_key, part)
+-            await asyncio.to_thread(on_audio, pcm)
++        import httpx
++        async with httpx.AsyncClient(timeout=60) as client:
++            for index, part in enumerate(parts):
++                if report: report(f'Leyendo parte {index+1} de {len(parts)}')
++                if _robotic_enabled():
++                    pcm = await asyncio.to_thread(_elevenlabs_speech_bytes, voice_id, api_key, part)
++                    await asyncio.to_thread(on_audio, pcm)
++                    continue
++                url=f'https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream'
++                body={'text':part,'model_id':'eleven_flash_v2_5',
++                      'voice_settings':_elevenlabs_voice_settings()}
++                if index: body['previous_text']=parts[index-1][-1000:]
++                async with client.stream('POST',url,params={'output_format':'pcm_16000'},
++                                         headers={'xi-api-key':api_key},json=body) as response:
++                    response.raise_for_status()
++                    pending=b''
++                    async for packet in response.aiter_bytes(1600):
++                        pending+=packet
++                        size=len(pending)//2*2
++                        if size:
++                            await asyncio.to_thread(on_audio,pending[:size])
++                            pending=pending[size:]
++                    if pending: raise RuntimeError('Audio PCM incompleto')
+         log.info('CLASSROOM EL_SPEECH_DONE parts=%d', len(parts))
+ 
+     def speech(self,text,on_audio,cancel=None):
+--- a/reachy_mini_classroom/static/app.js
++++ b/reachy_mini_classroom/static/app.js
+@@ -23,6 +23,10 @@
+   $('respond').disabled=busy||waiting||!selected||(listening&&selected!==state.session);
+   $('resume').disabled=busy||listening||waiting||!selected;
+   $('pause-voice').disabled=!waiting;
++  $('pause-voice').textContent='■ Parar habla';
++  const ready=!$('respond').disabled && state.phase!=='starting' && (!listening || (state.asr_ready && (state.asr_lag_seconds||0)<2));
++  $('respond').textContent=ready?'✓ Responder':'Responder';
++  $('respond').title=ready?'Lista para confirmar el texto y preparar el resumen':'Se confirmará el texto pendiente antes de responder';
+ }
+ async function refresh() {
+   try {
+--- a/portal/static/app.js
++++ b/portal/static/app.js
+@@ -1,5 +1,5 @@
+ /* Mi Reachy Portal — launcher + red WiFi */
+-const CLIENT_VERSION = "21";
++const CLIENT_VERSION = "22";
+ 
+ const toastEl = document.getElementById("toast") || null;
+ const restartBtn = document.getElementById("btn-daemon-restart") || null;
+@@ -478,7 +478,7 @@
+       assistantEl.className = "assistant";
+       assistantEl.classList.add("is-" + state);
+     }
+-    if (assistantStateEl) assistantStateEl.textContent = STATE_LABELS[state] || state;
++    if (assistantStateEl) assistantStateEl.textContent = !data.ok ? "No conectado" : d.ready ? "✓ Listo para escuchar" : STATE_LABELS[state] || state;
+     const youEl = document.getElementById("assistant-you");
+     const aiEl = document.getElementById("assistant-ai");
+     if (youEl) {
+@@ -495,6 +495,11 @@
+     if (assistantStateEl) assistantStateEl.textContent = "No conectado";
+   }
+ }
++
++on("btn-assistant-stop", "click", async () => {
++  try { const r=await fetch("/api/assistant/stop-speech", {method:"POST"}); const d=await r.json(); if(!d.ok) throw new Error("El asistente no está disponible"); await loadAssistantState(); }
++  catch(e) { toast(e.message,true); }
++});
+ 
+ let currentVoiceId = "";
+ let voiceSearchTimer = null;
+--- a/portal/static/index.html
++++ b/portal/static/index.html
+@@ -6,7 +6,7 @@
+     <meta name="color-scheme" content="light" />
+     <meta name="theme-color" content="#0c4a34" />
+     <title>Mi Reachy · Portal de aplicaciones</title>
+-    <link rel="stylesheet" href="/static/style.css?v=21" />
++    <link rel="stylesheet" href="/static/style.css?v=22" />
+   </head>
+   <body>
+     <div class="page">
+@@ -54,6 +54,7 @@
+               <span id="assistant-you" class="assistant__caption"></span>
+               <span id="assistant-ai" class="assistant__caption"></span>
+             </div>
++            <button type="button" id="btn-assistant-stop" class="btn btn--ghost btn--small">■ Parar habla</button>
+             <button type="button" id="btn-assistant-greet" class="btn btn--ghost btn--small">Saludar</button>
+             <button type="button" id="btn-assistant-settings" class="btn btn--ghost btn--small">Ajustes</button>
+           </div>
+@@ -197,6 +198,6 @@
+     </div>
+ 
+     <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+-    <script src="/static/app.js?v=21"></script>
++    <script src="/static/app.js?v=22"></script>
+   </body>
+ </html>

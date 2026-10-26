@@ -139,6 +139,7 @@ export const setMicMuted = (muted) => rpcCall("conversation.mic", { muted });
 
 export const getListenState = () => rpcCall("conversation.listen", {});
 export const setListening = (listening) => rpcCall("conversation.listen", { listening });
+export const stopSpeech = () => rpcCall("conversation.stop", {});
 
 export const newSession = () => rpcCall("conversation.new_session", {});
 export const readText = (text) => rpcCall("conversation.read", { text });

@@ -1,0 +1,26 @@
+{
+  "backup": "/home/pollen/latency-backups/20261026-103315",
+  "files": {
+    "reachy_mini_classroom/src/reachy_mini_classroom/local_asr.py": {
+      "before": "34600689590132e4358886f259fdbc20eb4ea1ec503919fb1cd25696604137fd",
+      "after": "17711e653a02c7901031aff0fc369a0a14de797b727c41f6a39f83f3f875d7fa"
+    },
+    "reachy_mini_classroom/src/reachy_mini_classroom/asr_worker.py": {
+      "before": "5eb8f0d9271cea002e7890a33b4718679f6c591a1bb2ae5d8a0ab8b2297adc2d",
+      "after": "863204228d772a08c3a5397e44ad9b780dc5f428e95452c27f89d8478010f75e"
+    },
+    "reachy_mini_hub/src/reachy_mini_hub/console.py": {
+      "before": "683c60fe7e6a0c1479e064f1e5e74ea792d4fbce9eb6c6e1c48cdf51ef1e5fae",
+      "after": "bd0f301ce1427aefb779fbc1ea7a3bd7dcca14c9bceb9b2b4fb0a2703998ae1f"
+    },
+    "reachy_mini_assistant/src/reachy_mini_assistant/assistant.py": {
+      "before": "797b7bf08f1d200535afad1ceab02b60a3c71d4c76b73629c504f9a1dcdbccfa",
+      "after": "a74482697a70deffe6b6eedb5f26177bf28d1f333cd24597339cab9cbabf22f8"
+    },
+    "reachy_mini_assistant/src/reachy_mini_assistant/realtime_engine.py": {
+      "before": "9c0ae3c7ba6cdd31e7fe7483d231999489dfda40afafe3eb9e16be5044ac03c5",
+      "after": "24c35429068ddf092afe79656aba45e8adf0f014de6e14516a665ceac914f2e4"
+    }
+  },
+  "status": "installed and classroom restarted healthy"
+}

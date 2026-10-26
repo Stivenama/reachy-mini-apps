@@ -1,17 +1,37 @@
 /* Mi Reachy Portal — launcher + red WiFi */
+const CLIENT_VERSION = "22";
 
-const toastEl = document.getElementById("toast");
-const restartBtn = document.getElementById("btn-daemon-restart");
+const toastEl = document.getElementById("toast") || null;
+const restartBtn = document.getElementById("btn-daemon-restart") || null;
 const viewApps = document.getElementById("view-apps");
+const viewMovimientos = document.getElementById("view-movimientos");
 const viewWifi = document.getElementById("view-wifi");
+const viewLogs = document.getElementById("view-logs");
 const tabs = Array.from(document.querySelectorAll(".tab"));
 
 let toastTimer = null;
 
-function toast(text, isError = false, ms = 4500) {
+function on(id, evt, fn) {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener(evt, fn);
+}
+
+function toast(text, isError = false, ms = 4500, url = null) {
   clearTimeout(toastTimer);
-  toastEl.textContent = text;
+  if (!toastEl) return;
   toastEl.classList.toggle("is-error", isError);
+  toastEl.textContent = "";
+  toastEl.append(text);
+  if (url) {
+    toastEl.append(" ");
+    const a = document.createElement("a");
+    a.href = url;
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.textContent = "Toca para abrir";
+    a.className = "toast__link";
+    toastEl.append(a);
+  }
   toastEl.hidden = false;
   requestAnimationFrame(() => toastEl.classList.add("show"));
   toastTimer = setTimeout(() => {
@@ -21,17 +41,72 @@ function toast(text, isError = false, ms = 4500) {
 }
 
 /* ---------- Router ---------- */
+const TABS = ["apps", "movimientos", "wifi", "logs"];
+let logsAutoTimer = null;
+let logsAuto = true;
+
 function route() {
   const hash = (location.hash || "#/apps").replace("#/", "");
-  const showWifi = hash === "wifi";
-  viewApps.hidden = showWifi;
-  viewWifi.hidden = !showWifi;
-  tabs.forEach((tab) => {
-    tab.classList.toggle("is-active", tab.dataset.tab === (showWifi ? "wifi" : "apps"));
-  });
-  if (showWifi) loadWifiStatus();
+  const tab = TABS.includes(hash) ? hash : "apps";
+  if (viewApps) viewApps.hidden = tab !== "apps";
+  if (viewMovimientos) viewMovimientos.hidden = tab !== "movimientos";
+  if (viewWifi) viewWifi.hidden = tab !== "wifi";
+  if (viewLogs) viewLogs.hidden = tab !== "logs";
+  tabs.forEach((t) => t.classList.toggle("is-active", t.dataset.tab === tab));
+  if (tab === "movimientos") {
+    loadMovimientos();
+    startMvPoll();
+  } else {
+    stopMvPoll();
+  }
+  if (tab === "wifi") loadWifiStatus();
+  if (tab === "logs") {
+    loadLogs();
+    startLogsAuto();
+  } else {
+    stopLogsAuto();
+  }
 }
 window.addEventListener("hashchange", route);
+
+/* ---------- Logs ---------- */
+async function loadLogs() {
+  const out = document.getElementById("logs-out");
+  const sel = document.getElementById("log-service");
+  if (!out || !sel) return;
+  try {
+    const res = await fetch(`/api/logs?service=${encodeURIComponent(sel.value)}&lines=250`);
+    const data = await res.json();
+    const lines = data.lines || [];
+    out.textContent = lines.join("\n") || "(sin logs)";
+    out.scrollTop = out.scrollHeight;
+  } catch (e) {
+    out.textContent = "Error al leer logs: " + e.message;
+  }
+}
+
+function startLogsAuto() {
+  if (logsAuto && !logsAutoTimer) logsAutoTimer = setInterval(loadLogs, 5000);
+}
+function stopLogsAuto() {
+  if (logsAutoTimer) {
+    clearInterval(logsAutoTimer);
+    logsAutoTimer = null;
+  }
+}
+
+const logRefreshBtn = document.getElementById("btn-log-refresh");
+if (logRefreshBtn) logRefreshBtn.addEventListener("click", loadLogs);
+const logAutoBtn = document.getElementById("btn-log-auto");
+if (logAutoBtn)
+  logAutoBtn.addEventListener("click", () => {
+    logsAuto = !logsAuto;
+    logAutoBtn.textContent = logsAuto ? "Auto: sí" : "Auto: no";
+    if (logsAuto) startLogsAuto();
+    else stopLogsAuto();
+  });
+const logServiceSel = document.getElementById("log-service");
+if (logServiceSel) logServiceSel.addEventListener("change", loadLogs);
 
 /* ---------- Aplicaciones ---------- */
 function initial(name) {
@@ -43,12 +118,16 @@ function typeLabel(tipo) {
   return tipo === "polla" ? "Aplicación de Reachy" : "Aplicación propia";
 }
 
+let lastApps = [];
+let lastOpenedTs = 0;
+
 async function loadApps() {
   const grid = document.getElementById("apps");
   try {
     const res = await fetch("/api/apps");
     const data = await res.json();
-    renderApps(grid, data.apps || []);
+    lastApps = data.apps || [];
+    renderApps(grid, lastApps);
   } catch (error) {
     grid.innerHTML = "";
     const empty = document.createElement("p");
@@ -57,6 +136,52 @@ async function loadApps() {
     grid.appendChild(empty);
   }
 }
+
+/* Abre la última app iniciada (por voz o botón) en una pestaña nueva. */
+async function checkPendingOpen() {
+  try {
+    const res = await fetch("/api/pending-open");
+    const d = await res.json();
+    if (!d.slug || !d.ts || d.ts === lastOpenedTs) return;
+    const app = lastApps.find((a) => a.slug === d.slug);
+    if (!app || !app.url) return;
+    lastOpenedTs = d.ts;
+    let w = null;
+    try {
+      w = window.open(app.url, "_blank");
+    } catch (e) {
+      w = null;
+    }
+    if (w) {
+      toast(`Abriendo ${app.nombre}…`);
+      try {
+        w.focus();
+      } catch (e) {
+        /* noop */
+      }
+    } else {
+      // El navegador bloqueó el popup: NUNCA secuestramos la pestaña del portal.
+      toast(`Abriendo ${app.nombre}.`, false, 20000, app.url);
+    }
+  } catch (e) {
+    /* noop */
+  }
+}
+setInterval(checkPendingOpen, 2000);
+
+/* Auto-actualización: si el servidor publica otra versión, recarga la página. */
+async function checkVersion() {
+  try {
+    const res = await fetch("/api/version");
+    const d = await res.json();
+    if (d.v && String(d.v) !== CLIENT_VERSION) {
+      location.reload();
+    }
+  } catch (e) {
+    /* noop */
+  }
+}
+setInterval(checkVersion, 30000);
 
 function renderApps(grid, apps) {
   grid.innerHTML = "";
@@ -146,21 +271,21 @@ async function act(app, action, btn, isStart) {
     const result = await res.json().catch(() => ({}));
     if (result.ok) {
       toast(isStart ? "Aplicación iniciada." : "Aplicación detenida.");
-      restartBtn.hidden = true;
+      if (restartBtn) restartBtn.hidden = true;
     } else {
       const detail = result.error || result.detail || "error desconocido";
       toast(`No se pudo completar la acción: ${detail}`, true, 8000);
-      restartBtn.hidden = false;
+      if (restartBtn) restartBtn.hidden = false;
     }
   } catch (error) {
     toast(`No se pudo conectar con el portal: ${error.message}`, true, 8000);
-    restartBtn.hidden = false;
+    if (restartBtn) restartBtn.hidden = false;
   } finally {
     setTimeout(loadApps, isStart ? 30000 : 6000);
   }
 }
 
-restartBtn.addEventListener("click", async () => {
+if (restartBtn) restartBtn.addEventListener("click", async () => {
   restartBtn.disabled = true;
   toast("Reiniciando el daemon de Reachy, tardará alrededor de un minuto…", false, 10000);
   try {
@@ -311,12 +436,12 @@ async function connectTo(ssid, password) {
 }
 
 document.getElementById("btn-scan").addEventListener("click", doScan);
-document.getElementById("btn-nacho").addEventListener("click", () => connectTo("NachoNacho", ""));
+on("btn-nacho", "click", () => connectTo("NachoNacho", ""));
 
-document.getElementById("wifi-manual").addEventListener("submit", (e) => {
+on("wifi-manual", "submit", (e) => {
   e.preventDefault();
-  const ssid = document.getElementById("manual-ssid").value.trim();
-  const password = document.getElementById("manual-pass").value;
+  const ssid = document.getElementById("manual-ssid")?.value.trim();
+  const password = document.getElementById("manual-pass")?.value || "";
   if (!ssid) {
     toast("Escribe el nombre de la red (SSID).", true);
     return;
@@ -324,7 +449,7 @@ document.getElementById("wifi-manual").addEventListener("submit", (e) => {
   connectTo(ssid, password);
 });
 
-document.getElementById("btn-hotspot").addEventListener("click", async () => {
+on("btn-hotspot", "click", async () => {
   toast("Creando hotspot del robot…");
   try {
     await fetch("/api/wifi/hotspot", { method: "POST" });
@@ -335,7 +460,371 @@ document.getElementById("btn-hotspot").addEventListener("click", async () => {
   setTimeout(loadWifiStatus, 6000);
 });
 
+/* ---------- Asistente (widget) ---------- */
+const assistantEl = document.getElementById("assistant");
+const assistantStateEl = document.getElementById("assistant-state");
+const settingsBtn = document.getElementById("btn-assistant-settings");
+const panel = document.getElementById("assistant-panel");
+
+const STATE_LABELS = { idle: "En espera", listening: "Escuchando…", thinking: "Pensando…", speaking: "Hablando…" };
+
+async function loadAssistantState() {
+  try {
+    const res = await fetch("/api/assistant/state");
+    const data = await res.json();
+    const d = data.data || {};
+    const state = d.state || "idle";
+    if (assistantEl) {
+      assistantEl.className = "assistant";
+      assistantEl.classList.add("is-" + state);
+    }
+    if (assistantStateEl) assistantStateEl.textContent = !data.ok ? "No conectado" : d.ready ? "✓ Listo para escuchar" : STATE_LABELS[state] || state;
+    const youEl = document.getElementById("assistant-you");
+    const aiEl = document.getElementById("assistant-ai");
+    if (youEl) {
+      const t = (d.user_text || "").slice(0, 140);
+      youEl.textContent = t ? "Tú: " + t : "";
+      youEl.hidden = !t;
+    }
+    if (aiEl) {
+      const t = (d.assistant_text || "").slice(0, 140);
+      aiEl.textContent = t ? "Asistente: " + t : "";
+      aiEl.hidden = !t;
+    }
+  } catch (e) {
+    if (assistantStateEl) assistantStateEl.textContent = "No conectado";
+  }
+}
+
+on("btn-assistant-stop", "click", async () => {
+  try { const r=await fetch("/api/assistant/stop-speech", {method:"POST"}); const d=await r.json(); if(!d.ok) throw new Error("El asistente no está disponible"); await loadAssistantState(); }
+  catch(e) { toast(e.message,true); }
+});
+
+let currentVoiceId = "";
+let voiceSearchTimer = null;
+
+async function populateVoiceSelect(current, search = "") {
+  const sel = document.getElementById("set-voice");
+  if (!sel) return;
+  try {
+    const q = (search || "").trim();
+    const url = q
+      ? `/api/elevenlabs/voices?search=${encodeURIComponent(q)}`
+      : "/api/elevenlabs/voices";
+    const res = await fetch(url);
+    const d = await res.json();
+    sel.replaceChildren();
+    const voices = d.voices || [];
+    if (!voices.length) {
+      sel.appendChild(new Option(
+        q ? `Sin resultados para "${q}"` : "No hay voces disponibles",
+        ""
+      ));
+      if (current) {
+        sel.appendChild(new Option(current, current));
+        sel.value = current;
+      }
+      return;
+    }
+    if (!current) sel.appendChild(new Option("— Seleccionar voz —", ""));
+    for (const v of voices) {
+      const labels = v.labels || {};
+      const desc = [labels.accent, labels.gender].filter(Boolean).join(", ");
+      let label = desc ? `${v.name} (${desc})` : v.name;
+      if (v.free === false) label += " ⚠ no en tu plan";
+      sel.appendChild(new Option(label, v.voice_id));
+    }
+    if (current) {
+      sel.value = current;
+      if (sel.value !== current) {
+        sel.insertBefore(new Option(current, current), sel.firstChild);
+        sel.value = current;
+      }
+    }
+  } catch (e) {
+    sel.replaceChildren(new Option("Error cargando voces", ""));
+  }
+}
+
+async function populateSettings() {
+  try {
+    const res = await fetch("/api/assistant/state");
+    const data = await res.json();
+    const c = (data.data || {}).config || {};
+    document.getElementById("set-personality").value = c.personality || "";
+    currentVoiceId = c.elevenlabs_voice_id || "";
+    const searchEl = document.getElementById("voice-search");
+    if (searchEl) searchEl.value = "";
+    await populateVoiceSelect(currentVoiceId, "");
+  } catch (e) {}
+}
+
+async function saveSettings() {
+  const payload = {
+    personality: document.getElementById("set-personality").value,
+  };
+  const voiceEl = document.getElementById("set-voice");
+  if (voiceEl && voiceEl.value) payload.elevenlabs_voice_id = voiceEl.value;
+  try {
+    const res = await fetch("/api/assistant/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    toast(data.ok ? "Ajustes guardados." : `Error: ${data.detail || data.error || "desconocido"}`, !data.ok);
+    if (panel) panel.hidden = true;
+  } catch (e) {
+    toast(`Error: ${e.message}`, true);
+  }
+}
+
+if (settingsBtn) settingsBtn.addEventListener("click", () => {
+  if (!panel) return;
+  panel.hidden = !panel.hidden;
+  if (!panel.hidden) populateSettings();
+});
+on("voice-search", "input", (e) => {
+  clearTimeout(voiceSearchTimer);
+  const q = e.target.value;
+  voiceSearchTimer = setTimeout(() => populateVoiceSelect(currentVoiceId, q), 300);
+});
+on("btn-close-assistant", "click", () => { if (panel) panel.hidden = true; });
+on("btn-save-assistant", "click", saveSettings);
+on("btn-assistant-greet", "click", async () => {
+  toast("Saludando…");
+  try { await fetch("/api/assistant/greet", { method: "POST" }); }
+  catch (e) { toast(`Error: ${e.message}`, true); }
+});
+
+async function greetOnOpen() {
+  try {
+    const res = await fetch("/api/assistant/state");
+    const data = await res.json();
+    if (data.data && data.data.state === "idle") {
+      await fetch("/api/assistant/greet", { method: "POST" });
+    }
+  } catch (e) { /* noop */ }
+}
+
+/* ---------- Movimientos (bailes y gestos) ---------- */
+const mvState = { cat: "bailes", loaded: {}, moves: [], last: null };
+let mvPoll = null;
+
+function prettyMove(m) {
+  return String(m).replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+async function loadMovimientos(force = false) {
+  const grid = document.getElementById("mv-grid");
+  if (!grid) return;
+  const cat = mvState.cat;
+  if (!force && mvState.loaded[cat] && mvState.moves.length) {
+    renderMvGrid();
+    return;
+  }
+  grid.innerHTML = "";
+  const wait = document.createElement("p");
+  wait.className = "waiting";
+  wait.textContent = "Cargando movimientos (desde Hugging Face)…";
+  grid.append(wait);
+  try {
+    const res = await fetch(`/api/movimientos?categoria=${encodeURIComponent(cat)}`);
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || "error del robot");
+    mvState.moves = data.moves || [];
+    mvState.loaded[cat] = true;
+    renderMvGrid();
+  } catch (e) {
+    grid.innerHTML = "";
+    const err = document.createElement("p");
+    err.className = "waiting";
+    err.textContent = "Error al cargar: " + e.message;
+    grid.append(err);
+  }
+}
+
+function renderMvGrid() {
+  const grid = document.getElementById("mv-grid");
+  if (!grid) return;
+  const q = (document.getElementById("mv-search")?.value || "").toLowerCase();
+  const list = mvState.moves.filter((m) => String(m).toLowerCase().includes(q));
+  grid.innerHTML = "";
+  if (!list.length) {
+    const p = document.createElement("p");
+    p.className = "waiting";
+    p.textContent = "Sin resultados.";
+    grid.append(p);
+    return;
+  }
+  for (const m of list) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "mv-item";
+    b.textContent = prettyMove(m);
+    b.addEventListener("click", () => playMove(m));
+    grid.append(b);
+  }
+}
+
+async function playMove(m) {
+  mvState.last = m;
+  const duracion = document.getElementById("mv-duracion");
+  if (duracion && duracion.checked) {
+    const variados = document.getElementById("mv-variados");
+    startPrograma(variados && variados.checked ? null : m);
+    return;
+  }
+  try {
+    const res = await fetch("/api/movimientos/play", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ categoria: mvState.cat, move: m }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || "no se pudo reproducir");
+    toast(`Reproduciendo: ${prettyMove(m)}`);
+    refreshMvRunning();
+  } catch (e) {
+    toast(`Error: ${e.message}`, true);
+  }
+}
+
+async function mvAction(path, body, quiet = false) {
+  try {
+    const res = await fetch(path, {
+      method: body ? "POST" : "GET",
+      headers: body ? { "Content-Type": "application/json" } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const data = await res.json();
+    if (!data.ok && !data.data && data.activo === undefined) {
+      throw new Error(data.error || data.detail || "falló");
+    }
+    return data;
+  } catch (e) {
+    if (!quiet) toast(`Error: ${e.message}`, true);
+    return null;
+  }
+}
+
+function fmtRestante(seg) {
+  const m = Math.floor(seg / 60);
+  const s = Math.round(seg % 60);
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+async function refreshMvRunning() {
+  const el = document.getElementById("mv-status");
+  const progEl = document.getElementById("mv-prog-status");
+  const [run, prog] = await Promise.all([
+    mvAction("/api/movimientos/running", null, true),
+    mvAction("/api/movimientos/programa", null, true),
+  ]);
+  if (progEl) {
+    if (prog && prog.activo) {
+      const que = prog.modo === "fijo" && prog.move ? prettyMove(prog.move) : "variados";
+      progEl.textContent = `⏳ ${que}: quedan ${fmtRestante(prog.quedan)}`;
+      progEl.dataset.active = "1";
+    } else if (progEl.dataset.active) {
+      delete progEl.dataset.active;
+      progEl.textContent = "Programa finalizado.";
+      setTimeout(() => {
+        if (!progEl.dataset.active) progEl.textContent = "";
+      }, 5000);
+    }
+  }
+  if (!el) return;
+  if (prog && prog.activo) {
+    el.textContent = "En programa";
+    return;
+  }
+  const d = run && run.data !== undefined ? run.data : null;
+  const names = Array.isArray(d) ? d : (d && (d.running || d.moves)) || [];
+  const list = (Array.isArray(names) ? names : [])
+    .map((x) => (typeof x === "string" ? x : x && (x.name || x.move_name || x.type)))
+    .filter(Boolean);
+  el.textContent = list.length ? `En movimiento: ${list.map(prettyMove).join(", ")}` : "En reposo";
+}
+
+function startMvPoll() {
+  refreshMvRunning();
+  if (!mvPoll) mvPoll = setInterval(refreshMvRunning, 2500);
+}
+
+function stopMvPoll() {
+  if (mvPoll) {
+    clearInterval(mvPoll);
+    mvPoll = null;
+  }
+}
+
+on("mv-search", "input", () => renderMvGrid());
+on("mv-duracion", "change", (e) => {
+  const act = !!e.target.checked;
+  const min = document.getElementById("mv-min");
+  const varChk = document.getElementById("mv-variados");
+  const minLabel = document.getElementById("mv-min-label");
+  const varLabel = document.getElementById("mv-variados-label");
+  if (min) min.disabled = !act;
+  if (varChk) varChk.disabled = !act;
+  if (minLabel) minLabel.classList.toggle("is-off", !act);
+  if (varLabel) varLabel.classList.toggle("is-off", !act);
+  const hint = document.getElementById("mv-hint");
+  if (hint) {
+    hint.innerHTML = act
+      ? 'Duración activa: toque un baile y <strong>se repetirá</strong> durante el tiempo elegido (con <strong>Variados</strong> encadena bailes distintos). <strong>Detener</strong> lo para cuando usted quiera.'
+      : 'Toque un baile y se ejecuta <strong>una vez</strong>. Marque <strong>Duración</strong> si quiere que dure más tiempo: al tocar el baile se repite durante los minutos elegidos (o encadena varios al azar con <strong>Variados</strong>). <strong>Detener</strong> lo para cuando usted quiera.';
+  }
+});
+on("mv-stop", "click", async () => {
+  const r = await mvAction("/api/movimientos/programa/stop", {});
+  if (r) toast("Detenido.");
+  refreshMvRunning();
+});
+
+async function startPrograma(move) {
+  const inp = document.getElementById("mv-min");
+  let min = parseFloat(inp ? inp.value : "1");
+  if (!isFinite(min)) min = 1;
+  min = Math.min(Math.max(min, 0.25), 60);
+  if (inp) inp.value = String(min);
+  const data = await mvAction("/api/movimientos/programa", {
+    minutos: min,
+    categoria: mvState.cat,
+    move: move || null,
+  });
+  if (data && data.ok) {
+    toast(`Programa de ${min} min iniciado (${move ? prettyMove(move) : "variados"}).`);
+    refreshMvRunning();
+  }
+}
+on("mv-random", "click", () => {
+  const list = mvState.moves;
+  if (!list.length) return toast("Primero elija una categoría.", true);
+  playMove(list[Math.floor(Math.random() * list.length)]);
+});
+on("mv-wake", "click", async () => {
+  const r = await mvAction("/api/movimientos/basico", { accion: "wake_up" });
+  if (r) toast("Despertando…");
+});
+on("mv-sleep", "click", async () => {
+  const r = await mvAction("/api/movimientos/basico", { accion: "goto_sleep" });
+  if (r) toast("Durmiendo…");
+});
+document.querySelectorAll(".mv-cat").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".mv-cat").forEach((b) => b.classList.remove("is-active"));
+    btn.classList.add("is-active");
+    mvState.cat = btn.dataset.cat;
+    loadMovimientos();
+  });
+});
+
 /* ---------- Arranque ---------- */
 route();
 loadApps();
+loadAssistantState();
 setInterval(loadApps, 15000);
+setInterval(loadAssistantState, 500);

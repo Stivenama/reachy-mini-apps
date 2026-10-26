@@ -2,6 +2,7 @@
 import asyncio
 import base64
 import contextlib
+import json as _json
 import os
 import logging
 import re
@@ -9,6 +10,97 @@ import time
 from email.utils import parsedate_to_datetime
 
 log = logging.getLogger(__name__)
+
+SHARED_VOICE_CONFIG = '/home/pollen/reachy_voice_config.json'
+
+
+def _load_elevenlabs_speech():
+    """Return (voice_id, api_key) si hay voz ElevenLabs configurada, si no None."""
+    try:
+        data = _json.loads(open(SHARED_VOICE_CONFIG, encoding='utf-8').read())
+        # Si el usuario eligió la voz HF nativa, la clase NO usa ElevenLabs.
+        if (data.get('voice_provider') or 'elevenlabs') == 'hf':
+            return None
+        vid = (data.get('elevenlabs_voice_id') or '').strip()
+        key = (data.get('elevenlabs_api_key') or '').strip()
+        if vid and key:
+            return vid, key
+    except Exception:
+        pass
+    return None
+
+
+def _robotic_enabled():
+    """Lee el flag compartido `elevenlabs_robotic` del JSON de config."""
+    try:
+        data = _json.loads(open(SHARED_VOICE_CONFIG, encoding='utf-8').read())
+        return bool(data.get('elevenlabs_robotic'))
+    except Exception:
+        return False
+
+
+def _elevenlabs_voice_settings():
+    """Voice settings según el flag compartido `elevenlabs_robotic` (lee el JSON en cada uso)."""
+    if _robotic_enabled():
+        # Robot metálico pausada: estabilidad alta, un toque de humanidad,
+        # sin boost de naturalidad y más lenta (orgánica, no apresurada).
+        return {'stability': 1.0, 'similarity_boost': 0.15,
+                'style': 0.0, 'use_speaker_boost': False,
+                'speed': 0.85}
+    # Natural (por defecto): expresiva y cálida.
+    return {'stability': 0.35, 'similarity_boost': 0.8,
+            'style': 0.55, 'use_speaker_boost': True}
+
+
+def _robotize_pcm16(data: bytes) -> bytes:
+    """Efecto robot de ciencia ficción sobre PCM 16-bit mono @16 kHz.
+
+    - Ring modulation (~83 Hz): el clásico tono metálico (tipo Dalek/Sci-Fi).
+    - Comb filter de 5 ms con realimentación: resonancia metálica.
+    - Bitcrush a 6 bits: grano digital "de robot".
+    """
+    if not data:
+        return data
+    import numpy as np
+    x = np.frombuffer(data, dtype='<i2').astype(np.float32)
+    n = x.size
+    if n == 0:
+        return data
+    # 1) Ring modulation: metálico pero con profundidad moderada (menos distorsión).
+    t = np.arange(n, dtype=np.float32) / 16000.0
+    x = x * (0.4 + 0.6 * np.sin(2.0 * np.pi * 83.0 * t))
+    # 2) Comb filter (retardo 5 ms realimentado): resonancia suave.
+    d = 80  # 5 ms @ 16 kHz
+    if n > 2 * d:
+        y = x.copy()
+        y[d:] += 0.45 * x[:-d]
+        y[2 * d:] += 0.2 * x[:-2 * d]
+        x = y
+    # 3) Bitcrush a 8 bits: grano digital sutil (sin saturar).
+    peak = float(np.max(np.abs(x))) or 1.0
+    step = peak / 128.0
+    x = np.round(x / step) * step
+    peak = float(np.max(np.abs(x))) or 1.0
+    if peak > 32000.0:
+        x = x * (32000.0 / peak)
+    return np.clip(x, -32768, 32767).astype(np.int16).tobytes()
+
+
+def _elevenlabs_speech_bytes(voice_id, api_key, text):
+    import httpx
+    url = f'https://api.elevenlabs.io/v1/text-to-speech/{voice_id}?output_format=pcm_16000'
+    headers = {'xi-api-key': api_key, 'Content-Type': 'application/json'}
+    body = {
+        'text': text,
+        'model_id': 'eleven_flash_v2_5',
+        'voice_settings': _elevenlabs_voice_settings(),
+    }
+    resp = httpx.post(url, headers=headers, json=body, timeout=60)
+    resp.raise_for_status()
+    audio = resp.content
+    if _robotic_enabled():
+        audio = _robotize_pcm16(audio)
+    return audio
 
 class ResponseCancelled(Exception):
     pass
@@ -356,6 +448,21 @@ class HubBackend:
 
     async def _speak(self,text,on_audio,conn,report=None):
         """Short requests share one connection and one player, including the final part."""
+        # Voz ElevenLabs configurada → sintetizar con EL en lugar del audio HF.
+        el = _load_elevenlabs_speech()
+        if el:
+            delivered = False
+            def deliver(pcm):
+                nonlocal delivered
+                delivered = True
+                on_audio(pcm)
+            try:
+                await self._speak_elevenlabs(text, deliver, el, report)
+                return
+            except Exception as e:
+                if delivered:
+                    raise RuntimeError('La voz se interrumpió. El resumen está guardado y puedes volver a leerlo.') from e
+                log.warning('CLASSROOM EL_SPEECH_FAILED error=%s; fallback HF', e)
         # Also covers a summary saved before plain text was enforced.
         parts=self._speech_parts(self.plain_text(text),self.speech_chars())
         queue=asyncio.Queue()
@@ -377,6 +484,34 @@ class HubBackend:
         finally:
             player.cancel()
             await asyncio.gather(player,return_exceptions=True)
+
+    async def _speak_elevenlabs(self, text, on_audio, el, report=None):
+        voice_id, api_key = el
+        parts = self._speech_parts(self.plain_text(text), self.speech_chars())
+        import httpx
+        async with httpx.AsyncClient(timeout=60) as client:
+            for index, part in enumerate(parts):
+                if report: report(f'Leyendo parte {index+1} de {len(parts)}')
+                if _robotic_enabled():
+                    pcm = await asyncio.to_thread(_elevenlabs_speech_bytes, voice_id, api_key, part)
+                    await asyncio.to_thread(on_audio, pcm)
+                    continue
+                url=f'https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream'
+                body={'text':part,'model_id':'eleven_flash_v2_5',
+                      'voice_settings':_elevenlabs_voice_settings()}
+                if index: body['previous_text']=parts[index-1][-1000:]
+                async with client.stream('POST',url,params={'output_format':'pcm_16000'},
+                                         headers={'xi-api-key':api_key},json=body) as response:
+                    response.raise_for_status()
+                    pending=b''
+                    async for packet in response.aiter_bytes(1600):
+                        pending+=packet
+                        size=len(pending)//2*2
+                        if size:
+                            await asyncio.to_thread(on_audio,pending[:size])
+                            pending=pending[size:]
+                    if pending: raise RuntimeError('Audio PCM incompleto')
+        log.info('CLASSROOM EL_SPEECH_DONE parts=%d', len(parts))
 
     def speech(self,text,on_audio,cancel=None):
         async def read():

@@ -46,6 +46,9 @@ class LocalASR:
                 except queue.Empty:continue
                 if msg['type']=='feed':
                     msg=dict(msg);msg['audio']=base64.b64encode(msg.pop('pcm')).decode()
+                    # Report queue pressure without dropping accepted audio. The
+                    # decoder can reduce preview work while catching up.
+                    msg['lag_seconds']=self.lag_seconds
                 self.process.stdin.write(json.dumps(msg)+'\n');self.process.stdin.flush()
         except (BrokenPipeError,OSError,ValueError) as exc:
             if not self.closed.is_set():self._fail(f'El proceso de transcripción cerró su canal (código {self.process.poll()}); se conserva el texto recibido. {exc}')
@@ -64,7 +67,12 @@ class LocalASR:
                     with self.lock:
                         waiter=self.waiters.get(msg['token'])
                         if waiter:waiter.set()
-                elif msg['type'] in ('partial','final'):self.callback(msg)
+                elif msg['type']=='final':self.callback(msg)
+                elif msg['type']=='partial' and self.lag_seconds<2:
+                    # Draft hypotheses are replaceable. Saving each one to SQLite
+                    # while behind blocks progress reads and can stall the worker's
+                    # stdout pipe. Always persist final text, never discard PCM.
+                    self.callback(msg)
         except Exception as exc:
             if not self.closed.is_set():self._fail(str(exc))
         finally:

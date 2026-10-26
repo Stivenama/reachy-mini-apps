@@ -5,10 +5,12 @@ served via the Reachy Mini Apps settings server so users can configure it.
 """
 
 import os
+import json
 import base64
 import time
 import asyncio
 import logging
+import threading
 from typing import Any, List, Optional
 from pathlib import Path
 from collections.abc import Callable
@@ -41,6 +43,7 @@ from reachy_mini_hub.config import (
 )
 from reachy_mini_hub.prompts import get_session_voice, get_session_instructions
 from reachy_mini_hub.streaming import AdditionalOutputs, audio_to_float32
+from reachy_mini_hub.elevenlabs_stream import SpeechTurn
 from reachy_mini_hub.startup_settings import read_startup_settings, write_startup_settings
 from reachy_mini_hub.tools.core_tools import initialize_tools
 from reachy_mini_hub.tool_space_routes import register_tool_space_methods
@@ -68,6 +71,155 @@ except Exception:  # pragma: no cover - only loaded when settings_app is used
     BaseModel = object  # type: ignore
 
 logger = logging.getLogger(__name__)
+
+# ---- ElevenLabs (voz compartida con Asistente y Clase continua) ----
+_SHARED_VOICE_CONFIG = Path("/home/pollen/reachy_voice_config.json")
+_EL_VOICES_CACHE: dict = {"ts": 0.0, "voices": []}
+_EL_SEARCH_CACHE: dict = {"q": None, "ts": 0.0, "voices": []}
+_EL_HTTP_CLIENT = None
+_EL_HTTP_LOCK = threading.Lock()
+
+
+def _elevenlabs_client():
+    """Reuse TLS connections between speech requests; safe for worker threads."""
+    import httpx
+    global _EL_HTTP_CLIENT
+    with _EL_HTTP_LOCK:
+        if _EL_HTTP_CLIENT is None:
+            _EL_HTTP_CLIENT = httpx.Client(
+                timeout=60.0,
+                limits=httpx.Limits(max_keepalive_connections=4, keepalive_expiry=60),
+            )
+        return _EL_HTTP_CLIENT
+
+
+def _read_shared_voice_cfg() -> dict:
+    try:
+        return json.loads(_SHARED_VOICE_CONFIG.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+_EL_ACTIVE_CACHE: dict = {"ts": 0.0, "active": False}
+
+
+def _elevenlabs_active() -> bool:
+    """True si hay una voz ElevenLabs seleccionada (con cache corto por rendimiento)."""
+    import time as _t
+
+    now = _t.time()
+    if now - _EL_ACTIVE_CACHE["ts"] < 2.0:
+        return bool(_EL_ACTIVE_CACHE["active"])
+    active = bool(str(_read_shared_voice_cfg().get("elevenlabs_voice_id") or "").strip())
+    _EL_ACTIVE_CACHE["ts"] = now
+    _EL_ACTIVE_CACHE["active"] = active
+    return active
+
+
+def _clear_elevenlabs_voice() -> None:
+    """Desactiva ElevenLabs en la config compartida (al elegir una voz HF)."""
+    try:
+        data = _read_shared_voice_cfg()
+        if data.get("elevenlabs_voice_id"):
+            data["elevenlabs_voice_id"] = ""
+            data["voice_provider"] = "hf"
+            _SHARED_VOICE_CONFIG.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("No se pudo limpiar la voz de ElevenLabs: %s", e)
+    _EL_ACTIVE_CACHE["ts"] = 0.0
+    _EL_ACTIVE_CACHE["active"] = False
+
+
+def _elevenlabs_synthesize(text: str):
+    """Sintetiza texto con ElevenLabs y devuelve PCM int16 (16 kHz mono)."""
+    import httpx
+
+    cfg = _read_shared_voice_cfg()
+    key = str(cfg.get("elevenlabs_api_key") or "").strip()
+    vid = str(cfg.get("elevenlabs_voice_id") or "").strip()
+    model = str(cfg.get("elevenlabs_model") or "eleven_flash_v2_5").strip()
+    if not key or not vid or not text.strip():
+        return None
+    try:
+        r = _elevenlabs_client().post(
+            f"https://api.elevenlabs.io/v1/text-to-speech/{vid}",
+            params={"output_format": "pcm_16000"},
+            headers={"xi-api-key": key, "Content-Type": "application/json"},
+            json={"text": text, "model_id": model},
+            timeout=60,
+        )
+        if r.status_code >= 400:
+            logger.error("ElevenLabs TTS error %s: %s", r.status_code, r.text[:200])
+            return None
+        pcm = np.frombuffer(r.content, dtype=np.int16).copy()
+        return pcm if pcm.size else None
+    except Exception as e:  # noqa: BLE001
+        logger.error("ElevenLabs TTS failed: %s", e)
+        return None
+
+
+def _fetch_el_account_voices(key: str) -> list:
+    import time as _t
+    import httpx
+
+    if _t.time() - _EL_VOICES_CACHE["ts"] < 60 and _EL_VOICES_CACHE["voices"]:
+        return _EL_VOICES_CACHE["voices"]
+    r = httpx.get(
+        "https://api.elevenlabs.io/v1/voices",
+        headers={"xi-api-key": key},
+        timeout=15,
+    )
+    r.raise_for_status()
+    voices = [
+        {
+            "voice_id": v.get("voice_id", ""),
+            "name": v.get("name", ""),
+            "labels": v.get("labels") or {},
+        }
+        for v in r.json().get("voices", [])
+    ]
+    _EL_VOICES_CACHE["ts"] = _t.time()
+    _EL_VOICES_CACHE["voices"] = voices
+    return voices
+
+
+def _fetch_el_shared_voices(key: str, query: str) -> list:
+    import time as _t
+    import httpx
+
+    if _EL_SEARCH_CACHE["q"] == query and _t.time() - _EL_SEARCH_CACHE["ts"] < 60:
+        return _EL_SEARCH_CACHE["voices"]
+    r = httpx.get(
+        "https://api.elevenlabs.io/v1/shared-voices",
+        params={"search": query, "page_size": 50},
+        headers={"xi-api-key": key},
+        timeout=15,
+    )
+    r.raise_for_status()
+    voices = [
+        {
+            "voice_id": v.get("voice_id", ""),
+            "name": v.get("name", ""),
+            "labels": {
+                "gender": v.get("gender") or "",
+                "age": v.get("age") or "",
+                "accent": v.get("accent") or "",
+                "language": v.get("language") or "",
+            },
+            "free": bool(v.get("free_users_allowed", False)),
+        }
+        for v in r.json().get("voices", [])
+    ]
+    _EL_SEARCH_CACHE["q"] = query
+    _EL_SEARCH_CACHE["ts"] = _t.time()
+    _EL_SEARCH_CACHE["voices"] = voices
+    return voices
+
+
+class ElevenLabsVoiceBody(BaseModel):
+    voice_id: str = ""
 
 
 def _detach_framework_root_routes(app: "FastAPI") -> None:
@@ -108,7 +260,7 @@ MAX_AUDIO_BUFFER_SAMPLES = 16000 * 60
 # silently unresponsive. ~0.4 s at 16 kHz.
 MIN_HOLD_SAMPLES = int(16000 * 0.4)
 # RMS por debajo del cual se considera silencio (habla = rms > umbral).
-SPEECH_RMS_THRESHOLD = 0.02
+SPEECH_RMS_THRESHOLD = 0.008
 # Segundos de silencio tras haber hablado para marcar "listo para responder".
 READY_SILENCE_S = 0.9
 
@@ -165,11 +317,19 @@ class LocalStream:
         self._last_turn_state: Optional[str] = None
         # Per-role throttle timestamps for conversation.level (orb audio meter).
         self._last_level_emit: dict[str, float] = {}
+        # Dedupe de la voz ElevenLabs (evita reproducir dos veces el mismo texto).
+        self._last_el_text: Optional[str] = None
+        self._last_el_ts: float = 0.0
+        self._el_turn = None
+        self._speech_epoch = 0
+        self._last_transcript = ""
+        self._last_transcript_at = None
         self._install_handler(handler)
 
     def _install_handler(self, handler: ConversationHandler) -> None:
         """Set the active handler and wire LocalStream-owned helpers into it."""
         self.handler = handler
+        handler._speech_observer = self._on_speech_event
         self.handler._clear_queue = self.clear_audio_queue
         self.handler.push_to_talk_holding = self._listening
         self._attach_observers_to_handler()
@@ -196,11 +356,85 @@ class LocalStream:
                 "conversation.transcript",
                 {"role": role, "text": text, "final": final},
             )
+        if role == "user" and self._listening and text.strip() and text != self._last_transcript:
+            self._last_transcript = text
+            self._last_transcript_at = time.monotonic()
+            self._heard_speech = True
+            if self._ready_announced:
+                self._ready_announced = False
+                self._broadcast_listening_ready(False)
 
     def _dispatch_text(self, text: str) -> None:
-        """Push a conversation.text notification (final assistant text) to JSON-RPC clients."""
         if self._rpc is not None and text:
             self._rpc.broadcast_threadsafe("conversation.text", {"text": text})
+
+    def _cancel_external_speech(self) -> None:
+        self._speech_epoch += 1
+        turn, self._el_turn = self._el_turn, None
+        if turn is not None:
+            turn.cancel()
+
+    def _on_speech_event(self, kind, channel="text", text="") -> None:
+        if kind == "start":
+            # Tool continuations may start before previous PCM has finished.
+            # Keep one ordered pipeline until all text and audio have drained.
+            if self._el_turn is not None and not self._el_turn.done.is_set():
+                if not self._el_turn.ended:
+                    from reachy_mini_hub.elevenlabs_stream import TextChunks
+                    self._el_turn.chunks = TextChunks()
+                    return
+            self._cancel_external_speech()
+            if not _elevenlabs_active(): return
+            cfg = _read_shared_voice_cfg()
+            if not cfg.get("elevenlabs_api_key") or not cfg.get("elevenlabs_voice_id"): return
+            epoch = self._speech_epoch
+            def state(value):
+                if epoch != self._speech_epoch or self._stop_event.is_set(): return
+                self.handler.deps.movement_manager.set_speaking(value == "speaking")
+                self._broadcast_turn(value, "elevenlabs")
+            def play(pcm):
+                if epoch != self._speech_epoch or self._stop_event.is_set(): return
+                data = np.frombuffer(pcm, dtype='<i2')
+                frame = audio_to_float32(data)
+                if self._audio_mode in ("robot", "both"):
+                    self._robot.media.push_audio_sample(frame)
+                if self._audio_mode in ("pc", "both"): self._broadcast_audio(data)
+                self._emit_level("assistant", frame)
+            def error(message):
+                if epoch == self._speech_epoch:
+                    self._broadcast_notice("voice_error", message)
+            self._el_turn = SpeechTurn(_elevenlabs_client(), cfg, play, state, error)
+        elif self._el_turn is not None:
+            if kind == "done": self._el_turn.finish()
+            else: self._el_turn.feed(channel, text, final=kind == "final")
+
+    def _update_listening_ready(self) -> None:
+        if not self._listening: return
+        now = time.monotonic()
+        # Stable recognised text is usable even with a fan/background above the
+        # fixed microphone RMS threshold. Empty recorder polls still run this.
+        stable = self._last_transcript_at is not None and now-self._last_transcript_at >= 1.2
+        quiet = self._last_speech_at is not None and now-self._last_speech_at >= READY_SILENCE_S
+        done = getattr(self.handler, '_response_done_event', None)
+        ready = bool(self._backend_connected() and (done is None or done.is_set())
+                     and self._heard_speech and self._streamed_samples >= MIN_HOLD_SAMPLES and (stable or quiet))
+        if ready != self._ready_announced:
+            self._ready_announced = ready
+            self._broadcast_listening_ready(ready)
+
+    async def stop_speech(self):
+        # Set the output gate before any await; late deltas cannot refill audio.
+        self.handler._output_stopped = True
+        self.clear_audio_queue()
+        self._listening = False
+        self._ready_announced = False
+        self.handler.push_to_talk_holding = False
+        self.handler.deps.movement_manager.set_listening(False)
+        self.handler.deps.movement_manager.set_speaking(False)
+        self._broadcast_turn("ready", "speech_stopped")
+        cancel = getattr(self.handler, 'cancel_response', None)
+        if cancel is not None: await cancel()
+        return {"ok": True, "listening": False, "state": "ready"}
 
     # Audio level meter for the client orb. RMS is scaled into a visible 0..1
     # range and capped to ~15 Hz so it stays light on the DataChannel.
@@ -252,6 +486,19 @@ class LocalStream:
 
     def _dispatch_activity(self, reason: str) -> None:
         """Fan one activity reason out to JSON-RPC clients."""
+        if self._listening and reason in ("user_speech_started", "user_transcription_delta", "user_transcription_completed"):
+            # Backend speech evidence also works for quiet voices below the
+            # local level threshold. Transcription completion is not thinking
+            # while the user still has the microphone open.
+            self._heard_speech = True
+            self._last_speech_at = time.monotonic()
+            if self._ready_announced:
+                self._ready_announced = False
+                self._broadcast_listening_ready(False)
+        if getattr(self.handler, '_output_stopped', False) and not self._listening:
+            return
+        if _elevenlabs_active() and reason in ('assistant_audio_delta', 'assistant_transcript_done', 'response.done'):
+            return  # external player owns the visible speaking/completion state
         if self._rpc is not None:
             # While the talk button is held the orb must stay on "listening":
             # any activity arriving now belongs to a previous turn still being
@@ -285,6 +532,8 @@ class LocalStream:
 
     def _set_listening(self, listening: bool) -> None:
         """Toggle the mic gate and mirror the state to motion + JSON-RPC clients."""
+        if self._listening == bool(listening):
+            return
         self._listening = bool(listening)
         try:
             self.handler.push_to_talk_holding = self._listening
@@ -295,6 +544,9 @@ class LocalStream:
         except Exception as e:
             logger.debug("Failed to sync listening state to movement manager: %s", e)
         if self._listening:
+            self.clear_audio_queue()
+            self._last_transcript = ""
+            self._last_transcript_at = None
             self._streamed_samples = 0
             self._heard_speech = False
             self._ready_announced = False
@@ -312,6 +564,8 @@ class LocalStream:
         aquí solo se hace commit del buffer del backend y se pide la respuesta.
         Si no se escuchó voz, se avisa en vez de commitear silencio.
         """
+        if not self._listening:
+            return
         self._set_listening(False)
         if not self._heard_speech or self._streamed_samples < MIN_HOLD_SAMPLES:
             logger.info(
@@ -323,6 +577,8 @@ class LocalStream:
                 "turn_too_short",
                 "No te escuché. Habla y vuelve a intentarlo.",
             )
+            self._broadcast_turn("ready", "turn_too_short")
+            self._emit_phase("ready", "turn_too_short")
             return
         self._ready_announced = False
         if self._asyncio_loop is not None and self._asyncio_loop.is_running():
@@ -330,9 +586,7 @@ class LocalStream:
 
     def _broadcast_listening_ready(self, ready: bool) -> None:
         """Notify clients that the transcription is ready to respond (or not)."""
-        if self._rpc is not None:
-            state = "listening_ready" if ready else "listening"
-            self._rpc.broadcast_threadsafe("conversation.turn", {"state": state, "reason": "silence"})
+        self._broadcast_turn("listening_ready" if ready else "listening", "silence")
 
     def _broadcast_notice(self, kind: str, message: str) -> None:
         """Push a user-facing conversation.notice notification to JSON-RPC clients."""
@@ -617,9 +871,15 @@ class LocalStream:
         return get_available_voices()
 
     def get_current_voice(self) -> str:
-        """Return the currently selected voice override or profile voice."""
+        """Return the currently selected voice override or profile voice.
+
+        Si hay una voz ElevenLabs activa y no hay override HF explícito,
+        devuelve "" para que el selector HF aparezca deseleccionado.
+        """
         if self._voice_override:
             return self._voice_override
+        if _elevenlabs_active():
+            return ""
         try:
             return get_session_voice(default=get_default_voice())
         except Exception as exc:
@@ -644,6 +904,8 @@ class LocalStream:
             logger.debug("Could not sync LocalStream voice override after voice change: %s", e)
         if self._voice_override:
             self._persist_voice_override(self._voice_override)
+        # Al elegir una voz HF, desactivar ElevenLabs para que esta tome efecto.
+        _clear_elevenlabs_voice()
         return status
 
     def _persist_voice_override(self, voice: str) -> None:
@@ -702,6 +964,66 @@ class LocalStream:
         self._timeline = TimelineController(daemon_base_url, timelines_dir)
         self._timeline.set_motion_hooks(self._fire_timeline_emotion, self._stop_timeline_moves)
         register_timeline_routes(settings_app, self._timeline)
+
+        # ---- ElevenLabs: listar voces, leer y aplicar (junto al selector HF) ----
+        @settings_app.get("/api/elevenlabs/voices")
+        def _el_voices(search: str = ""):
+            key = str(_read_shared_voice_cfg().get("elevenlabs_api_key") or "").strip()
+            if not key:
+                return {"voices": [], "error": "falta elevenlabs_api_key"}
+            try:
+                account = _fetch_el_account_voices(key)
+                query = (search or "").strip()
+                if not query:
+                    return {"voices": account}
+                matched = [
+                    v for v in account
+                    if query.lower() in (v.get("name") or "").lower()
+                ]
+                seen = {v["voice_id"] for v in matched}
+                shared = []
+                try:
+                    for sv in _fetch_el_shared_voices(key, query):
+                        if sv["voice_id"] and sv["voice_id"] not in seen:
+                            seen.add(sv["voice_id"])
+                            shared.append(sv)
+                except Exception:  # noqa: BLE001
+                    pass
+                return {"voices": matched + shared}
+            except Exception as e:  # noqa: BLE001
+                return {"voices": [], "error": str(e)}
+
+        @settings_app.get("/api/elevenlabs/voice")
+        def _el_voice_current():
+            return {"voice_id": str(_read_shared_voice_cfg().get("elevenlabs_voice_id") or "").strip()}
+
+        @settings_app.post("/api/elevenlabs/voice")
+        def _el_voice_set(body: ElevenLabsVoiceBody):
+            vid = (body.voice_id or "").strip()
+            try:
+                data = {}
+                if _SHARED_VOICE_CONFIG.exists():
+                    data = json.loads(_SHARED_VOICE_CONFIG.read_text(encoding="utf-8"))
+                data["elevenlabs_voice_id"] = vid
+                _SHARED_VOICE_CONFIG.write_text(
+                    json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+                )
+            except Exception as e:  # noqa: BLE001
+                return {"ok": False, "error": str(e)}
+            _EL_ACTIVE_CACHE["ts"] = 0.0
+            _EL_ACTIVE_CACHE["active"] = bool(vid)
+            if vid:
+                # Al elegir ElevenLabs: quitar la selección de la voz HF por defecto.
+                self._voice_override = None
+                if self._instance_path:
+                    try:
+                        existing = read_startup_settings(self._instance_path)
+                        write_startup_settings(
+                            self._instance_path, profile=existing.profile, voice=None
+                        )
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning("Failed to clear HF voice after EL select: %s", e)
+            return {"ok": True, "voice_id": vid}
 
         def _status_payload() -> dict[str, object]:
             hf_session_url = get_hf_session_url()
@@ -766,6 +1088,10 @@ class LocalStream:
             rpc.broadcast_threadsafe("conversation.turn", {"state": "listening", "reason": "interrupted"})
             return {"ok": True}
 
+        @rpc.method("conversation.stop")
+        async def _rpc_stop(_params: dict[str, object]) -> dict[str, object]:
+            return await self.stop_speech()
+
         @rpc.method("conversation.mic")  # type: ignore[untyped-decorator]
         def _rpc_mic(params: dict[str, object]) -> dict[str, object]:
             # Legacy mute API kept for older clients. Muting commits the
@@ -792,7 +1118,9 @@ class LocalStream:
                     self._mic_muted = False
                     self._stop_listening_and_commit()
                 logger.info("Listening=%s via /rpc", self._listening)
-            return {"listening": self._listening}
+            self._update_listening_ready()
+            return {"listening": self._listening, "ready": self._listening and self._ready_announced,
+                    "state": self._last_turn_state}
 
         @rpc.method("conversation.new_session")  # type: ignore[untyped-decorator]
         async def _rpc_new_session(_params: dict[str, object]) -> dict[str, object]:
@@ -1042,6 +1370,7 @@ class LocalStream:
         - Cancels all pending async tasks (openai-handler, record-loop, play-loop)
         """
         logger.info("Stopping LocalStream...")
+        self._cancel_external_speech()
 
         if self._timeline is not None:
             self._timeline.stop()
@@ -1077,6 +1406,7 @@ class LocalStream:
         deprecated ``clear_output_buffer()`` only for older SDKs.
         """
         logger.info("User intervention: flushing player queue")
+        self._cancel_external_speech()
         audio = getattr(self._robot.media, "audio", None)
         if audio is not None:
             if hasattr(audio, "clear_player") and callable(audio.clear_player):
@@ -1119,19 +1449,10 @@ class LocalStream:
                 if rms > SPEECH_RMS_THRESHOLD:
                     self._heard_speech = True
                     self._last_speech_at = time.monotonic()
-                    if self._ready_announced:
-                        self._ready_announced = False
-                        self._broadcast_listening_ready(False)
-                elif (
-                    self._heard_speech
-                    and not self._ready_announced
-                    and self._last_speech_at is not None
-                    and time.monotonic() - self._last_speech_at > READY_SILENCE_S
-                ):
-                    self._ready_announced = True
-                    self._broadcast_listening_ready(True)
                 await self.handler.receive((input_sample_rate, audio_frame))
-            await asyncio.sleep(0)  # avoid busy loop
+            self._update_listening_ready()
+            # Yield briefly when the recorder is empty instead of spinning a CPU.
+            await asyncio.sleep(0.005 if audio_frame is None else 0)
 
     @staticmethod
     def _frame_rms(audio_frame: Any) -> float:
@@ -1166,12 +1487,18 @@ class LocalStream:
             elif isinstance(handler_output, tuple):
                 # Never play assistant audio while the talk button is held;
                 # the handler also drops it, this is the playback backstop.
-                if self._listening:
+                if self._listening or getattr(self.handler, "_output_stopped", False):
                     continue
                 _, audio_data = handler_output
 
                 # Skip empty audio frames
                 if audio_data.size == 0:
+                    continue
+
+                # Con ElevenLabs activo, la voz la produce _speak_elevenlabs
+                # (a partir del texto final). Descartamos el audio del backend
+                # para no reproducir dos voces a la vez.
+                if _elevenlabs_active():
                     continue
 
                 # Reshape if needed

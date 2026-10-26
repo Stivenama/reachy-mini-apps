@@ -92,6 +92,7 @@ class ConversationHandler(AsyncStreamHandler, ABC):
     def _mark_activity(self, reason: str) -> None:
         """Record non-idle conversation activity for the idle timer."""
         self.last_activity_time = time.monotonic()
+        self.deps.movement_manager.note_conversation_activity()
         logger.debug("last activity time updated to %s (%s)", self.last_activity_time, reason)
         if self._activity_observer is not None:
             try:
@@ -112,6 +113,7 @@ class ConversationHandler(AsyncStreamHandler, ABC):
             idle_duration > self.IDLE_BEHAVIOR_THRESHOLD_S
             and idle_behavior_duration > self.IDLE_BEHAVIOR_THRESHOLD_S
             and self._idle_behavior_ready()
+            and not getattr(self, "push_to_talk_holding", False)
             and self.deps.movement_manager.is_idle()
         ):
             try:

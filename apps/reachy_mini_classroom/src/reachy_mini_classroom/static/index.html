@@ -1,16 +1,47 @@
 <!doctype html>
 <html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Reachy · Clase continua</title><link rel="stylesheet" href="static/style.css"></head>
+<title>Reachy · Clase continua</title><link rel="stylesheet" href="static/style.css?v=camera1"></head>
 <body><main>
 <header><a id="portal" href="#">← Mi Reachy Portal</a><span>REACHY / AULA</span></header>
 <section class="intro"><p class="eyebrow">ESCUCHAR · GUARDAR · COMPRENDER</p><h1>Una clase.<br>Todo el contexto.</h1>
 <p>Reachy escucha en silencio. Guarda bloques de 20 minutos al detectar la siguiente pausa y resume la clase cuando pulses <strong>Responder</strong>.</p></section>
+<section class="panel camera-panel" id="camera-panel" aria-label="Cámara y movimiento">
+<div class="section-head"><div><p class="eyebrow">LA MIRADA DE REACHY</p><h2>Cerca de cada detalle.</h2></div><button id="camera-toggle" class="secondary" aria-pressed="true">Ocultar cámara</button></div>
+<div id="camera-content">
+<div class="camera-stage" id="camera-stage" tabindex="0" aria-label="Vista de la cámara. Arrastra para orientar o desplazar el recorte; pellizca para ampliar.">
+<div class="camera-image-wrap" id="camera-image-wrap"><img id="camera-image" alt="Imagen en vivo de Reachy" draggable="false"><video id="camera-video" autoplay playsinline muted hidden aria-label="Vídeo en vivo de Reachy"></video></div>
+<div class="camera-top"><span id="camera-state" role="status">Conectando cámara…</span><button id="camera-fullscreen" aria-label="Ampliar cámara a pantalla completa">⛶ Pantalla completa</button></div>
+<span class="camera-crosshair" aria-hidden="true">+</span>
+<div class="camera-bottom"><span id="zoom-badge">1.0×</span><span id="camera-caption">Doble toque para ampliar un punto</span></div>
+</div>
+<div class="camera-toolbar"><button id="control-toggle" aria-pressed="false">Controlar Reachy</button><button id="view-center" class="secondary" disabled>Centrar robot</button><button id="zoom-reset" class="secondary">Restablecer vista</button></div>
+<div class="camera-grid"><div>
+<label for="camera-gesture">Al arrastrar la imagen</label><select id="camera-gesture"><option value="robot">Orientar la cabeza</option><option value="crop">Desplazar el zoom</option></select>
+<div class="zoom-row"><label for="camera-zoom">Zoom digital</label><output id="zoom-value" for="camera-zoom">1.0×</output></div>
+<input id="camera-zoom" type="range" min="1" max="4" step="0.05" value="1" aria-label="Aumento digital de la cámara">
+<label class="check-label"><input id="natural-motion" type="checkbox" checked> Antenas con movimiento natural</label>
+</div><div class="direction-controls"><div class="dpad" aria-label="Mover cabeza">
+<button data-axis="pitch" data-direction="-1" class="up secondary" aria-label="Cabeza arriba" disabled>↑</button>
+<button data-axis="yaw" data-direction="1" class="left secondary" aria-label="Cabeza izquierda" disabled>←</button>
+<span>Cabeza</span><button data-axis="yaw" data-direction="-1" class="right secondary" aria-label="Cabeza derecha" disabled>→</button>
+<button data-axis="pitch" data-direction="1" class="down secondary" aria-label="Cabeza abajo" disabled>↓</button></div>
+<div class="body-controls"><button data-axis="body" data-direction="1" class="secondary" aria-label="Girar cuerpo a la izquierda" disabled>↶</button><span>Cuerpo</span><button data-axis="body" data-direction="-1" class="secondary" aria-label="Girar cuerpo a la derecha" disabled>↷</button></div>
+</div></div>
+<p id="control-state" class="fine" role="status">Puedes ampliar la imagen sin activar los movimientos.</p>
+<details class="camera-settings"><summary>Teclado y mando</summary><p class="fine">Flechas: cabeza · Mayús + ← / →: cuerpo. Haz clic en la cámara para usar los atajos. Esc libera el control. El zoom se aplica al último punto señalado.</p>
+<div class="key-settings"><label>Tecla para acercar<button id="bind-in" class="secondary">+</button></label><label>Tecla para alejar<button id="bind-out" class="secondary">−</button></label></div>
+<label class="check-label"><input id="gamepad-enabled" type="checkbox"> Usar mando de juego</label><p id="gamepad-state" class="fine">Mando estándar: stick izquierdo, cabeza; derecho horizontal, cuerpo; gatillos, zoom. Conecta el mando y pulsa un botón.</p></details>
+</div></section>
 <section class="panel"><div class="status"><span id="dot"></span><h2 id="phase" aria-live="polite">Conectando…</h2><span id="clock">00:00</span></div>
 <progress id="progress" max="1200" value="0" aria-label="Tiempo del bloque actual"></progress>
 <p id="hint">Cada bloque empieza una nueva etapa de escucha.</p>
 <p id="progress-note" class="fine" aria-live="polite" hidden></p>
 <label for="title">Nombre de la clase</label><input id="title" maxlength="160" placeholder="Ej. Biología · Fotosíntesis">
 <div class="actions"><button id="start">Iniciar nueva clase</button><button id="respond" class="primary">Responder</button><button id="pause" class="secondary">Pausar escucha</button><button id="pause-voice" class="secondary">Pausar voz</button></div>
+<div class="voice-row"><label for="native-voice">Voz (Reachy / HF)</label><select id="native-voice" style="width:100%"><option value="">Cargando voces…</option></select></div>
+<div class="voice-row"><label for="el-voice">Voz (ElevenLabs)</label><input id="el-voice-search" type="search" placeholder="Buscar voz por nombre…" autocomplete="off" style="width:100%;margin-bottom:6px"><select id="el-voice" style="width:100%"><option value="">Cargando voces…</option></select></div>
+<p class="fine" id="voice-active" style="margin-top:8px;font-weight:600"></p>
+<div class="voice-row"><label for="voice-mode">Estilo de voz</label><select id="voice-mode" style="width:100%"><option value="natural">Natural</option><option value="robotic">Robotizado</option></select></div>
 <aside class="live-box" aria-label="Transcripción en vivo"><div class="live-head"><strong>Transcripción en vivo</strong><span id="live-state">Español · esperando</span></div><p id="live-text" aria-live="polite">Aquí verás lo que Reachy va entendiendo. Las frases se confirman al detectar una pausa.</p><meter id="mic-level" min="0" max="0.15" value="0" aria-label="Nivel del micrófono"></meter></aside>
 <p id="error" role="alert" hidden></p><p class="fine">«Responder» detiene la escucha, guarda el último fragmento y espera todos los textos antes de hablar. Puedes cerrar esta página: la escucha continúa en el robot.</p></section>
 <section class="archive"><div class="section-head"><h2>Clases guardadas</h2><select id="sessions" aria-label="Seleccionar clase"><option value="">Sin clases</option></select></div>
@@ -19,4 +50,4 @@
 <article id="summary" class="panel" hidden><h2>Resumen de la clase</h2><p id="summary-text"></p></article>
 <div id="blocks"><p class="empty">Tu primera clase aparecerá aquí.</p></div></section>
 <footer>Solo texto · Español · Movimientos del Hub · Voz bajo demanda</footer>
-</main><script src="static/app.js"></script></body></html>
+</main><script src="static/app.js?v=2"></script><script src="static/camera.js?v=1"></script></body></html>

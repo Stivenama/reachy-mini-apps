@@ -23,6 +23,10 @@ function controls() {
   $('respond').disabled=busy||waiting||!selected||(listening&&selected!==state.session);
   $('resume').disabled=busy||listening||waiting||!selected;
   $('pause-voice').disabled=!waiting;
+  $('pause-voice').textContent='■ Parar habla';
+  const ready=!$('respond').disabled && state.phase!=='starting' && (!listening || (state.asr_ready && (state.asr_lag_seconds||0)<2));
+  $('respond').textContent=ready?'✓ Responder':'Responder';
+  $('respond').title=ready?'Lista para confirmar el texto y preparar el resumen':'Se confirmará el texto pendiente antes de responder';
 }
 async function refresh() {
   try {
@@ -75,6 +79,132 @@ $('respond').onclick=()=>act('api/respond',{session:selected});
 $('resume').onclick=()=>act('api/start',{session:selected});
 $('pause-voice').onclick=async()=>{try{await request('api/pause-voice',{});}catch(error){userError=error.message;}await refresh();};
 $('sessions').onchange=()=>{selected=$('sessions').value;userError='';refresh();};
+
+// ---- Voces: nativa (Reachy/HF) + ElevenLabs + estilo ----
+let nativeCurrent = '';
+let elCurrent = '';
+let elSearchTimer = null;
+let roboticMode = false;
+
+function updateVoiceLabel(provider) {
+  const el = $('voice-active');
+  if (!el) return;
+  const base = provider === 'hf'
+    ? `Voz activa: Reachy (${nativeCurrent || 'predeterminada'})`
+    : `Voz activa: ElevenLabs (${elCurrent || 'predeterminada'})`;
+  el.textContent = `${base} · ${roboticMode ? 'Robotizado' : 'Natural'}`;
+}
+
+function fillElSelect(voices, current) {
+  const sel = $('el-voice');
+  sel.replaceChildren();
+  if (!voices.length) {
+    sel.appendChild(new Option(current || 'No hay voces disponibles', current || ''));
+    if (current) sel.value = current;
+    return;
+  }
+  if (!current) sel.appendChild(new Option('— Seleccionar voz —', ''));
+  for (const v of voices) {
+    const labels = v.labels || {};
+    const desc = [labels.accent, labels.gender].filter(Boolean).join(', ');
+    let label = desc ? `${v.name} (${desc})` : v.name;
+    if (v.free === false) label += ' ⚠ no en tu plan';
+    sel.appendChild(new Option(label, v.voice_id));
+  }
+  if (current) {
+    sel.value = current;
+    if (sel.value !== current) {
+      sel.insertBefore(new Option(current, current), sel.firstChild);
+      sel.value = current;
+    }
+  }
+}
+
+async function loadVoicesUI() {
+  try {
+    const [nat, cur, rob] = await Promise.all([
+      fetch('api/voices/native').then(r => r.json()),
+      fetch('api/voices/elevenlabs/current').then(r => r.json()),
+      fetch('api/voices/robotic').then(r => r.json()).catch(() => ({ robotic: false })),
+    ]);
+    nativeCurrent = nat.current || '';
+    elCurrent = cur.voice_id || '';
+    roboticMode = !!rob.robotic;
+    const provider = nat.provider || cur.provider || 'elevenlabs';
+
+    const modeSel = $('voice-mode');
+    if (modeSel) modeSel.value = roboticMode ? 'robotic' : 'natural';
+
+    const ns = $('native-voice');
+    ns.replaceChildren();
+    const nvoices = nat.voices || [];
+    if (!nvoices.length) {
+      ns.appendChild(new Option('No hay voces disponibles', ''));
+    } else {
+      for (const v of nvoices) ns.appendChild(new Option(v, v));
+      if (nativeCurrent) ns.value = nativeCurrent;
+    }
+
+    const es = await fetch('api/voices/elevenlabs').then(r => r.json());
+    fillElSelect(es.voices || [], elCurrent);
+    updateVoiceLabel(provider);
+  } catch (e) {
+    const ns = $('native-voice');
+    if (ns) ns.replaceChildren(new Option('Error cargando voces', ''));
+  }
+}
+
+$('voice-mode').onchange = async () => {
+  const want = $('voice-mode').value === 'robotic';
+  try {
+    await request('api/voices/robotic', { robotic: want });
+    roboticMode = want;
+    userError = '';
+    // Refrescar el indicador (conserva el provider que se venía usando).
+    const nat = await fetch('api/voices/native').then(r => r.json()).catch(() => null);
+    updateVoiceLabel((nat && nat.provider) || (elCurrent ? 'elevenlabs' : 'hf'));
+  } catch (e) {
+    userError = e.message;
+    $('voice-mode').value = roboticMode ? 'robotic' : 'natural';
+  }
+};
+
+$('native-voice').onchange = async () => {
+  const v = $('native-voice').value;
+  if (!v) return;
+  try {
+    await request('api/voices/native', { voice_id: v });
+    nativeCurrent = v;
+    userError = '';
+    updateVoiceLabel('hf');
+  } catch (e) { userError = e.message; }
+};
+
+$('el-voice-search').oninput = () => {
+  clearTimeout(elSearchTimer);
+  const q = $('el-voice-search').value;
+  elSearchTimer = setTimeout(async () => {
+    try {
+      const url = 'api/voices/elevenlabs' + (q.trim() ? '?search=' + encodeURIComponent(q.trim()) : '');
+      const vr = await fetch(url).then(r => r.json());
+      fillElSelect(vr.voices || [], elCurrent);
+    } catch (e) { /* keep list */ }
+  }, 300);
+};
+
+$('el-voice').onchange = async () => {
+  const vid = $('el-voice').value;
+  if (!vid) return;
+  try {
+    await request('api/voices/elevenlabs', { voice_id: vid });
+    elCurrent = vid;
+    userError = '';
+    updateVoiceLabel('elevenlabs');
+  } catch (e) { userError = e.message; }
+};
+
+loadVoicesUI();
+
 $('download').onclick=async event=>{
   event.preventDefault();
   const link=$('download'), original='Descargar texto completo';

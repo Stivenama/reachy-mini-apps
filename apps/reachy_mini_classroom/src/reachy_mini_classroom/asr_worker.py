@@ -17,6 +17,7 @@ def main():
     pending=bytearray()
     last_partial=''
     last_check=last_progress=0.
+    backlog_seconds=0.
     def emit(data): print(json.dumps(data,ensure_ascii=False),flush=True)
     def progress(force=False):
         nonlocal last_progress
@@ -41,7 +42,7 @@ def main():
         else:
             now=time.monotonic()
             # Throttle BEFORE computing the expensive lattice hypothesis.
-            if now-last_check>=.3:
+            if now-last_check>=(1.0 if backlog_seconds>=8 else .3):
                 last_check=now
                 text=json.loads(rec.PartialResult()).get('partial','')
                 if text!=last_partial:
@@ -52,8 +53,11 @@ def main():
     for line in sys.stdin:
         msg=json.loads(line)
         if msg['type']=='feed':
-            if block is not None and msg['block']!=block and pending:
-                consume(bytes(pending));pending.clear();final(True)
+            backlog_seconds=max(0.,float(msg.get('lag_seconds',0.)))
+            if block is not None and msg['block']!=block:
+                if pending: consume(bytes(pending));pending.clear()
+                # Finalize the old block even at an exact 100 ms packet boundary.
+                final(True)
             block=msg['block']
             pending.extend(base64.b64decode(msg['audio'],validate=True))
             while len(pending)>=3200:

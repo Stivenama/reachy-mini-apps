@@ -221,6 +221,10 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
         # (e.g. gpt-5.6-terra with reasoning_effort). Once detected, tools are
         # disabled for the session so the conversation keeps working.
         self._tools_disabled = False
+        self._output_stopped = False
+        self._cancelled_response_ids = set()
+        self._active_response_id = None
+        self._response_epoch = 0
 
     @staticmethod
     def _sanitize_tool_result_for_model(tool_name: str, tool_result: dict[str, Any]) -> dict[str, Any]:
@@ -492,7 +496,8 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
 
         This method never blocks the caller.
         """
-        await self._pending_responses.put(kwargs)
+        if not self._output_stopped:
+            await self._pending_responses.put(kwargs)
 
     async def say(self, text: str) -> None:
         """Inject ``text`` as a turn and have the model voice it now.
@@ -506,6 +511,7 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
             raise ValueError("say: empty text")
         if not self.connection:
             raise RuntimeError("say: no active session")
+        self._output_stopped = False
         await self.connection.conversation.item.create(
             item={
                 "type": "message",
@@ -562,6 +568,7 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
         while self.connection:
             try:
                 kwargs = await self._pending_responses.get()
+                epoch = self._response_epoch
             except asyncio.CancelledError:
                 return
 
@@ -585,7 +592,7 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
                     logger.debug("Timed out waiting for previous response to finish; forcing ahead")
                     self._response_done_event.set()
 
-                if not self.connection:
+                if not self.connection or self._output_stopped or epoch != self._response_epoch:
                     break
 
                 self._last_response_rejected = False
@@ -762,7 +769,9 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
 
     async def _run_realtime_session(self) -> None:
         """Establish and manage a single realtime session."""
-        tool_specs = get_tool_specs()
+        # Large choreography belongs to the local inactivity policy, never to
+        # a spoken answer (which would also add another model/tool roundtrip).
+        tool_specs = get_tool_specs(exclusion_list=["dance", "play_emotion"])
         logger.info(
             "Tools to be used in conversation: %s",
             [tool["name"] for tool in tool_specs],
@@ -809,6 +818,17 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
 
                 async for event in self.connection:
                     logger.debug("Realtime event: %s", event.type)
+                    if event.type.startswith('response.output_') and self._suppressed_response_holds(event):
+                        continue
+                    if event.type == 'response.function_call_arguments.done' and self._output_stopped:
+                        continue
+                    observer = getattr(self, '_speech_observer', None)
+                    if observer and event.type in ('response.output_text.delta', 'response.output_audio_transcript.delta'):
+                        channel = 'text' if event.type == 'response.output_text.delta' else 'audio'
+                        observer('delta', channel, getattr(event, 'delta', '') or '')
+                    if observer and event.type in ('response.output_text.done', 'response.output_audio_transcript.done'):
+                        channel = 'text' if event.type == 'response.output_text.done' else 'audio'
+                        observer('final', channel, getattr(event, 'text', '') or getattr(event, 'transcript', '') or '')
                     if event.type == "input_audio_buffer.speech_started":
                         self._mark_activity("user_speech_started")
                         self._turn_user_done_at = None
@@ -821,7 +841,7 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
 
                     if event.type == "input_audio_buffer.speech_stopped":
                         self._mark_activity("user_speech_stopped")
-                        self.deps.movement_manager.set_listening(False)
+                        self.deps.movement_manager.set_listening(self.push_to_talk_holding)
                         logger.debug("User speech stopped - server will auto-commit with VAD")
 
                     if event.type == "response.output_audio.done":
@@ -837,6 +857,11 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
                             self._emit_text(event.text)
 
                     if event.type == "response.created":
+                        self._active_response_id = getattr(event.response, 'id', None)
+                        if self._output_stopped:
+                            if self._active_response_id: self._cancelled_response_ids.add(self._active_response_id)
+                            await self.connection.response.cancel()
+                            continue
                         if push_to_talk_enabled() and self.push_to_talk_holding:
                             # A pause triggered server VAD while the user still
                             # holds the talk button. Mark this response as
@@ -856,6 +881,7 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
                             if self._clear_queue:
                                 self._clear_queue()
                             continue
+                        if observer: observer("start")
                         self._mark_activity("response_created")
                         self.deps.movement_manager.set_speaking(True)
                         self._response_done_event.clear()
@@ -867,6 +893,8 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
                         logger.debug("Response created (active)")
 
                     if event.type == "response.done":
+                        if observer and not self._suppressed_response_holds(event) and not self._in_flight_tool_calls:
+                            observer('done')
                         # Doesn't mean the audio is done playing
                         # Resume tracking for responses that emit no audio (text-only / tool-only).
                         self.deps.movement_manager.set_speaking(False)
@@ -906,7 +934,7 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
                         raw_transcript = event.transcript or ""
                         transcript = raw_transcript.strip()
                         logger.debug("User transcript: %s", raw_transcript)
-                        self.deps.movement_manager.set_listening(False)
+                        self.deps.movement_manager.set_listening(self.push_to_talk_holding)
 
                         await self._cancel_partial_transcript_task()
 
@@ -1071,6 +1099,9 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
     # Microphone receive
     def _suppressed_response_holds(self, event: Any) -> bool:
         """Return whether an output event belongs to a suppressed push-to-talk response."""
+        event_id = getattr(event, 'response_id', None) or getattr(getattr(event, 'response', None), 'id', None)
+        if self._output_stopped or event_id in self._cancelled_response_ids:
+            return True
         if not push_to_talk_enabled():
             return False
         if self.push_to_talk_holding:
@@ -1080,6 +1111,19 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
             if event_id == self._suppressed_response_id:
                 return True
         return False
+
+    async def cancel_response(self) -> None:
+        self._output_stopped = True
+        self._response_epoch += 1
+        if self._active_response_id:
+            self._cancelled_response_ids.add(self._active_response_id)
+        while not self._pending_responses.empty():
+            try: self._pending_responses.get_nowait()
+            except asyncio.QueueEmpty: break
+        if self.connection and not self._response_done_event.is_set():
+            try: await asyncio.wait_for(self.connection.response.cancel(), timeout=2)
+            except Exception: logger.debug('Response cancellation could not be confirmed')
+        self.deps.movement_manager.set_speaking(False)
 
     async def commit_input(self) -> None:
         """Commit the buffered input audio, clearing the server input buffer."""
@@ -1100,6 +1144,7 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
         """
         if not self.connection:
             return
+        self._output_stopped = False
         if frames:
             for frame in frames:
                 await self.receive(frame)
@@ -1139,6 +1184,8 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
         """
         if not self.connection:
             return "no_session"
+        self._output_stopped = False
+        epoch = self._response_epoch
         voice = self.get_current_voice()
         try:
             speech = await self.client.audio.speech.create(
@@ -1148,9 +1195,13 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
                 response_format="wav",
             )
         except Exception as error:
+            if self._output_stopped or epoch != self._response_epoch:
+                return "cancelled"
             logger.warning("TTS endpoint unavailable (%s); falling back to verbatim say()", error)
             await self._say_verbatim(text)
             return "say_fallback"
+        if self._output_stopped or epoch != self._response_epoch:
+            return "cancelled"
         rate, pcm = _wav_to_pcm16(speech.content)
         if pcm is None or pcm.size == 0:
             logger.warning("Empty TTS audio; falling back to verbatim say()")

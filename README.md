@@ -5,6 +5,7 @@ Desarrollo organizado para mantener y reconstruir las aplicaciones de un Reachy 
 | Carpeta | Contenido |
 | --- | --- |
 | `apps/reachy_mini_hub` | Hub de conversación, movimientos, personalidades y herramientas; incluye adaptaciones locales. |
+| `apps/reachy_mini_assistant` | Asistente automático, voz progresiva y parada de habla desde el portal. |
 | `apps/reachy_mini_audio_mixer` | Selección y control de salida de audio. |
 | `apps/reachy_mini_classroom` | Clase continua: transcripción local en español, bloques de 20 minutos y resumen hablado bajo demanda. |
 | `apps/asistente_clase` | Aplicación para Windows: recibe los TXT, integra Drive, Classroom y NotebookLM, y genera materiales de estudio. Incluye su interfaz web y receptor local. |
