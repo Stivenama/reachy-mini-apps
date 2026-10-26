@@ -23,10 +23,6 @@ function controls() {
   $('respond').disabled=busy||waiting||!selected||(listening&&selected!==state.session);
   $('resume').disabled=busy||listening||waiting||!selected;
   $('pause-voice').disabled=!waiting;
-  $('pause-voice').textContent='■ Parar habla';
-  const ready=!$('respond').disabled && state.phase!=='starting' && (!listening || (state.asr_ready && (state.asr_lag_seconds||0)<2));
-  $('respond').textContent=ready?'✓ Responder':'Responder';
-  $('respond').title=ready?'Lista para confirmar el texto y preparar el resumen':'Se confirmará el texto pendiente antes de responder';
 }
 async function refresh() {
   try {
@@ -223,4 +219,4 @@ $('download').onclick=async event=>{
   }
   await refresh();
 };
-(async function poll(){await refresh();setTimeout(poll,500);})();
+(async function poll(){await refresh();setTimeout(poll,500);})();

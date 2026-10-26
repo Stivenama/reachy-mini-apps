@@ -94,25 +94,6 @@ class Tests(unittest.IsolatedAsyncioTestCase):
             await stream.aclose()
         self.assertTrue(response.closed)
 
-    async def test_classroom_streams_before_complete(self):
-        response=Response([b'\0'*1600]*3);client=Client(response);received=[]
-        def play(pcm):
-            self.assertFalse(response.closed)
-            received.append(pcm)
-        with patch('httpx.AsyncClient',return_value=client),patch.object(backend,'_robotic_enabled',return_value=False):
-            await backend.HubBackend()._speak_elevenlabs('Prueba de voz.',play,('v','fake'))
-        self.assertEqual(sum(map(len,received)),4800)
-
-    async def test_classroom_no_replay_after_partial_failure(self):
-        b=backend.HubBackend()
-        async def fail(text,on_audio,*args):
-            on_audio(b'\0\0')
-            raise OSError('offline')
-        with patch.object(backend,'_load_elevenlabs_speech',return_value=('v','fake')),patch.object(b,'_speak_elevenlabs',side_effect=fail),patch.object(b,'_create',new_callable=AsyncMock) as create:
-            with self.assertRaisesRegex(RuntimeError,'guardado'):
-                await b._speak('Resumen',lambda p:None,None)
-            create.assert_not_called()
-
     async def test_stop_ignores_late_output_and_resumes_next_speech(self):
         chunks=[]
         e=realtime_engine.RealtimeEngine('fake','',on_text_chunk=chunks.append)

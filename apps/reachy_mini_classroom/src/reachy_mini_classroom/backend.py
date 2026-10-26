@@ -451,17 +451,10 @@ class HubBackend:
         # Voz ElevenLabs configurada → sintetizar con EL en lugar del audio HF.
         el = _load_elevenlabs_speech()
         if el:
-            delivered = False
-            def deliver(pcm):
-                nonlocal delivered
-                delivered = True
-                on_audio(pcm)
             try:
-                await self._speak_elevenlabs(text, deliver, el, report)
+                await self._speak_elevenlabs(text, on_audio, el, report)
                 return
             except Exception as e:
-                if delivered:
-                    raise RuntimeError('La voz se interrumpió. El resumen está guardado y puedes volver a leerlo.') from e
                 log.warning('CLASSROOM EL_SPEECH_FAILED error=%s; fallback HF', e)
         # Also covers a summary saved before plain text was enforced.
         parts=self._speech_parts(self.plain_text(text),self.speech_chars())
@@ -488,29 +481,12 @@ class HubBackend:
     async def _speak_elevenlabs(self, text, on_audio, el, report=None):
         voice_id, api_key = el
         parts = self._speech_parts(self.plain_text(text), self.speech_chars())
-        import httpx
-        async with httpx.AsyncClient(timeout=60) as client:
-            for index, part in enumerate(parts):
-                if report: report(f'Leyendo parte {index+1} de {len(parts)}')
-                if _robotic_enabled():
-                    pcm = await asyncio.to_thread(_elevenlabs_speech_bytes, voice_id, api_key, part)
-                    await asyncio.to_thread(on_audio, pcm)
-                    continue
-                url=f'https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream'
-                body={'text':part,'model_id':'eleven_flash_v2_5',
-                      'voice_settings':_elevenlabs_voice_settings()}
-                if index: body['previous_text']=parts[index-1][-1000:]
-                async with client.stream('POST',url,params={'output_format':'pcm_16000'},
-                                         headers={'xi-api-key':api_key},json=body) as response:
-                    response.raise_for_status()
-                    pending=b''
-                    async for packet in response.aiter_bytes(1600):
-                        pending+=packet
-                        size=len(pending)//2*2
-                        if size:
-                            await asyncio.to_thread(on_audio,pending[:size])
-                            pending=pending[size:]
-                    if pending: raise RuntimeError('Audio PCM incompleto')
+        for index, part in enumerate(parts):
+            if report: report(f'Generando voz {index+1} de {len(parts)}')
+            log.info('CLASSROOM EL_SPEECH_PART part=%d total=%d chars=%d',
+                     index + 1, len(parts), len(part))
+            pcm = await asyncio.to_thread(_elevenlabs_speech_bytes, voice_id, api_key, part)
+            await asyncio.to_thread(on_audio, pcm)
         log.info('CLASSROOM EL_SPEECH_DONE parts=%d', len(parts))
 
     def speech(self,text,on_audio,cancel=None):
@@ -529,4 +505,4 @@ class HubBackend:
                 log.info('CLASSROOM SUMMARY_READY chars=%d',len(result))
                 await self._speak(result,on_audio,conn,report)
             log.info('CLASSROOM RESPONSE_SESSION_CLOSED')
-        return self.run(transaction(),cancel)
+        return self.run(transaction(),cancel)

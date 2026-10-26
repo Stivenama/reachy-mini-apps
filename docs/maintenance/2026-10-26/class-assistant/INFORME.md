@@ -1,5 +1,7 @@
 # Voz, parada y arranque de Reachy
 
+**Actualización posterior:** se revirtieron la voz progresiva y los controles nuevos de clase continua a petición del usuario, tras observar habla entrecortada en la prueba real. Clase continua utiliza nuevamente los archivos originales `backend.py` y `static/app.js` del respaldo anterior. El asistente, Reachy Hub, el portal y la corrección de arranque conservan sus mejoras. Los resultados y el manifiesto que siguen documentan la instalación inicial, no el estado actual de la voz de clase continua. Las dos pruebas específicas de la variante retirada se eliminaron del conjunto vigente; permanecen las seis pruebas del asistente.
+
 Cambios instalados el 26 de octubre de 2026, después de revisar las aplicaciones y los registros del robot.
 
 ## Funcionamiento
