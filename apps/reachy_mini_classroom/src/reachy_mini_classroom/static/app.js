@@ -219,4 +219,4 @@ $('download').onclick=async event=>{
   }
   await refresh();
 };
-(async function poll(){await refresh();setTimeout(poll,500);})();
+(async function poll(){await refresh();setTimeout(poll,500);})();

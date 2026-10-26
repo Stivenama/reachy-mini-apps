@@ -505,4 +505,4 @@ class HubBackend:
                 log.info('CLASSROOM SUMMARY_READY chars=%d',len(result))
                 await self._speak(result,on_audio,conn,report)
             log.info('CLASSROOM RESPONSE_SESSION_CLOSED')
-        return self.run(transaction(),cancel)
+        return self.run(transaction(),cancel)
